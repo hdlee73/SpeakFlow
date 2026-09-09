@@ -40,23 +40,13 @@ object DatasetParser {
 
     internal fun rowsToPairs(source: List<List<String>>): List<SentencePair> {
         val rows = source.map { row -> row.map(String::trim) }.filter { it.any(String::isNotBlank) }
-        require(rows.size >= 2 || rows.any { it.size >= 2 }) {
-            "한국어와 영어가 들어 있는 두 행(또는 두 열)이 필요합니다."
+        require(rows.any { it.size >= 2 }) {
+            "A열의 한국어와 B열의 영어 문장이 필요합니다."
         }
 
-        val rowPairs = if (rows.size >= 2) {
-            val width = maxOf(rows[0].size, rows[1].size)
-            (0 until width).mapNotNull { column ->
-                pairOrNull(rows[0].getOrElse(column) { "" }, rows[1].getOrElse(column) { "" })
-            }
-        } else emptyList()
-
-        val columnPairs = rows.mapNotNull { row ->
+        return rows.mapNotNull { row ->
             pairOrNull(row.getOrElse(0) { "" }, row.getOrElse(1) { "" })
-        }
-
-        val chosen = if (rowPairs.size >= columnPairs.size) rowPairs else columnPairs
-        return chosen.dropWhile { pair ->
+        }.dropWhile { pair ->
             val ko = pair.korean.lowercase()
             val en = pair.english.lowercase()
             (ko.contains("한국") || ko == "korean") && (en.contains("영어") || en == "english")
@@ -147,10 +137,11 @@ object DatasetParser {
     }
 
     private fun parseXml(bytes: ByteArray, handler: DefaultHandler) {
-        SAXParserFactory.newInstance().apply {
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-        }.newSAXParser().parse(ByteArrayInputStream(bytes), handler)
+        val factory = SAXParserFactory.newInstance().apply { isNamespaceAware = false }
+        // Android 기기별 XML 구현에서 지원하는 보안 옵션만 적용한다.
+        runCatching { factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-general-entities", false) }
+        runCatching { factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+        factory.newSAXParser().parse(ByteArrayInputStream(bytes), handler)
     }
 }
