@@ -13,7 +13,7 @@ import java.util.Locale
 class SpeechEngine(
     context: Context,
     private val onPromptFinished: () -> Unit,
-    private val onResult: (String) -> Unit,
+    private val onResult: (List<String>) -> Unit,
     private val onUnavailable: (String) -> Unit
 ) {
     private var ttsReady = false
@@ -29,11 +29,11 @@ class SpeechEngine(
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                onResult(matches?.firstOrNull().orEmpty())
+                onResult(matches.orEmpty())
             }
             override fun onError(error: Int) {
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) onUnavailable("마이크 권한이 필요합니다.")
-                else onResult("")
+                else onResult(emptyList())
             }
             override fun onReadyForSpeech(params: Bundle?) = Unit
             override fun onBeginningOfSpeech() = Unit
@@ -58,7 +58,9 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
         }
         recognizer.startListening(intent)
     }

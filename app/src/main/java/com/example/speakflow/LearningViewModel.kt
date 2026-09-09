@@ -21,7 +21,7 @@ import java.io.File
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("learning", 0)
     private val savedDataset = File(application.filesDir, "dataset")
-    private val _state = MutableStateFlow(LearningUiState(settings = loadSettings()))
+    private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration()))
     val state: StateFlow<LearningUiState> = _state.asStateFlow()
     private var timerJob: Job? = null
     private var deadline = 0L
@@ -88,18 +88,25 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         startTimer()
     }
 
-    fun onRecognition(text: String) {
+    fun onRecognition(candidates: List<String>) {
         val expected = _state.value.current?.english ?: return
-        val score = SpeechScorer.score(expected, text)
+        timerJob?.cancel()
+        val best = candidates.filter(String::isNotBlank)
+            .map { it to SpeechScorer.score(expected, it) }
+            .maxByOrNull { it.second }
+        val text = best?.first.orEmpty()
+        val score = best?.second ?: 0
         if (score >= _state.value.settings.passScore) {
-            timerJob?.cancel()
             _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, score = score) }
-            viewModelScope.launch { delay(1_100); next() }
         } else {
-            val remains = ((deadline - System.currentTimeMillis()) / 1_000).toInt().coerceAtLeast(0)
-            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, score = score, remainingSeconds = remains) }
-            if (remains > 0) viewModelScope.launch { delay(650); _state.update { state -> state.copy(phase = LessonPhase.LISTENING) } }
+            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, score = score, remainingSeconds = 0) }
         }
+    }
+
+    fun retryListening() {
+        deadline = System.currentTimeMillis() + _state.value.settings.timeoutSeconds * 1_000L
+        _state.update { it.copy(phase = LessonPhase.LISTENING, remainingSeconds = it.settings.timeoutSeconds) }
+        startTimer()
     }
 
     fun onRecognitionUnavailable(message: String) {
@@ -149,17 +156,20 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 delay(250)
             }
             _state.update { it.copy(phase = LessonPhase.TIMED_OUT, remainingSeconds = 0) }
-            delay(900)
-            next()
         }
     }
 
-    private fun loadSettings() = LearningSettings(
+    private fun loadSettingsWithMigration(): LearningSettings {
+        if (!prefs.getBoolean("recognition_v2", false)) {
+            prefs.edit().putInt("timeout", 20).putInt("pass_score", 68).putBoolean("recognition_v2", true).apply()
+        }
+        return LearningSettings(
         mode = runCatching { LearningMode.valueOf(prefs.getString("mode", null) ?: "SHADOWING") }.getOrDefault(LearningMode.SHADOWING),
         order = runCatching { PlayOrder.valueOf(prefs.getString("order", null) ?: "SEQUENTIAL") }.getOrDefault(PlayOrder.SEQUENTIAL),
-        timeoutSeconds = prefs.getInt("timeout", 10),
-        passScore = prefs.getInt("pass_score", 78)
-    )
+        timeoutSeconds = prefs.getInt("timeout", 20),
+        passScore = prefs.getInt("pass_score", 68)
+        )
+    }
 
     private fun buildOrder(size: Int, order: PlayOrder): List<Int> =
         (0 until size).toList().let { if (order == PlayOrder.RANDOM) it.shuffled() else it }

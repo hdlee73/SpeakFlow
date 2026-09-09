@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                 onPrevious = viewModel::previous,
                 onNext = viewModel::next,
                 onReplay = viewModel::startSpeaking,
+                onRetry = viewModel::retryListening,
                 onMessageDismiss = viewModel::clearMessage
             )
         }
