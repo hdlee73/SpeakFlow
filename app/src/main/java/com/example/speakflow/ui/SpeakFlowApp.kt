@@ -276,28 +276,43 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave: (LearningSettings) -> Unit) {
     var draft by remember(current) { mutableStateOf(current) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Text("학습 설정", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
-            Spacer(Modifier.height(20.dp))
-            Text("학습 방식", fontWeight = FontWeight.Bold)
-            LearningMode.entries.forEach { mode ->
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = draft.mode == mode, onClick = { draft = draft.copy(mode = mode) })
-                    Column(Modifier.padding(vertical = 8.dp)) { Text(mode.label); Text(mode.description, color = Color.Gray, fontSize = 12.sp) }
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                Text("학습 설정", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
+                Spacer(Modifier.height(20.dp))
+                Text("학습 방식", fontWeight = FontWeight.Bold)
+                LearningMode.entries.forEach { mode ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = draft.mode == mode, onClick = { draft = draft.copy(mode = mode) })
+                        Column(Modifier.padding(vertical = 8.dp)) { Text(mode.label); Text(mode.description, color = Color.Gray, fontSize = 12.sp) }
+                    }
                 }
+                Spacer(Modifier.height(14.dp))
+                Text("문장 순서", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PlayOrder.entries.forEach { order -> FilterChip(selected = draft.order == order, onClick = { draft = draft.copy(order = order) }, label = { Text(order.label) }) }
+                }
+                Spacer(Modifier.height(18.dp))
+                Text("문장 반복 횟수", fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..5).forEach { count ->
+                        FilterChip(
+                            selected = draft.repeatCount == count,
+                            onClick = { draft = draft.copy(repeatCount = count) },
+                            label = { Text("${count}회") },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                Text("자동 넘김: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
+                Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
+                Text("통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
+                Slider(value = draft.passScore.toFloat(), onValueChange = { draft = draft.copy(passScore = it.toInt()) }, valueRange = 55f..95f, steps = 7)
+                Spacer(Modifier.height(12.dp))
             }
-            Spacer(Modifier.height(14.dp))
-            Text("문장 순서", fontWeight = FontWeight.Bold)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PlayOrder.entries.forEach { order -> FilterChip(selected = draft.order == order, onClick = { draft = draft.copy(order = order) }, label = { Text(order.label) }) }
-            }
-            Spacer(Modifier.height(18.dp))
-            Text("자동 넘김: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
-            Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
-            Text("통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
-            Slider(value = draft.passScore.toFloat(), onValueChange = { draft = draft.copy(passScore = it.toInt()) }, valueRange = 55f..95f, steps = 7)
-            Spacer(Modifier.height(20.dp))
             Button(onClick = { onSave(draft) }, Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) { Text("설정 저장") }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

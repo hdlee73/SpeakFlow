@@ -25,6 +25,7 @@ enum class LessonPhase {
 data class LearningSettings(
     val mode: LearningMode = LearningMode.SHADOWING,
     val order: PlayOrder = PlayOrder.SEQUENTIAL,
+    val repeatCount: Int = 1,
     val timeoutSeconds: Int = 10,
     val passScore: Int = 78
 )

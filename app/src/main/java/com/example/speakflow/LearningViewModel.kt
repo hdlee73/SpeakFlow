@@ -65,7 +65,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun resetWith(items: List<SentencePair>, name: String, id: String) {
-        val order = buildOrder(items.size, _state.value.settings.order)
+        val order = buildOrder(items.size, _state.value.settings.order, _state.value.settings.repeatCount)
         _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id, message = null) }
     }
 
@@ -73,12 +73,13 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         prefs.edit()
             .putString("mode", settings.mode.name)
             .putString("order", settings.order.name)
+            .putInt("repeat_count", settings.repeatCount)
             .putInt("timeout", settings.timeoutSeconds)
             .putInt("pass_score", settings.passScore)
             .apply()
         timerJob?.cancel()
         _state.update {
-            it.copy(settings = settings, order = buildOrder(it.items.size, settings.order), position = 0,
+            it.copy(settings = settings, order = buildOrder(it.items.size, settings.order, settings.repeatCount), position = 0,
                 phase = LessonPhase.IDLE, heardText = "", score = null, remainingSeconds = 0)
         }
     }
@@ -98,6 +99,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     fun onRecognition(candidates: List<String>) {
         val expected = _state.value.current?.english ?: return
         timerJob?.cancel()
+        val remaining = ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt().coerceAtLeast(0)
         val best = candidates.filter(String::isNotBlank)
             .map { it to SpeechScorer.score(expected, it) }
             .maxByOrNull { it.second }
@@ -106,7 +108,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         if (score >= _state.value.settings.passScore) {
             _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, liveText = text, score = score) }
         } else {
-            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = 0) }
+            // Recognition services can finish a listening session after a short pause.
+            // Preserve the real countdown instead of incorrectly jumping to 0 seconds.
+            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = remaining) }
         }
     }
 
@@ -155,7 +159,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         _state.update {
             if (it.items.isEmpty()) it.copy(message = "먼저 엑셀 데이터셋을 불러오세요.")
-            else it.copy(order = buildOrder(it.items.size, it.settings.order), position = 0, phase = LessonPhase.SPEAKING,
+            else it.copy(order = buildOrder(it.items.size, it.settings.order, it.settings.repeatCount), position = 0, phase = LessonPhase.SPEAKING,
                 heardText = "", liveText = "", score = null, remainingSeconds = 0)
         }
     }
@@ -182,11 +186,14 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         return LearningSettings(
         mode = runCatching { LearningMode.valueOf(prefs.getString("mode", null) ?: "SHADOWING") }.getOrDefault(LearningMode.SHADOWING),
         order = runCatching { PlayOrder.valueOf(prefs.getString("order", null) ?: "SEQUENTIAL") }.getOrDefault(PlayOrder.SEQUENTIAL),
+        repeatCount = prefs.getInt("repeat_count", 1).coerceIn(1, 5),
         timeoutSeconds = prefs.getInt("timeout", 20),
         passScore = prefs.getInt("pass_score", 68)
         )
     }
 
-    private fun buildOrder(size: Int, order: PlayOrder): List<Int> =
-        (0 until size).toList().let { if (order == PlayOrder.RANDOM) it.shuffled() else it }
+    private fun buildOrder(size: Int, order: PlayOrder, repeatCount: Int): List<Int> =
+        (0 until size).toList()
+            .let { if (order == PlayOrder.RANDOM) it.shuffled() else it }
+            .flatMap { index -> List(repeatCount.coerceIn(1, 5)) { index } }
 }

@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.media.AudioAttributes
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -19,14 +22,37 @@ class SpeechEngine(
     private val onUnavailable: (String) -> Unit
 ) {
     private var ttsReady = false
-    private val tts = TextToSpeech(context.applicationContext) { status -> ttsReady = status == TextToSpeech.SUCCESS }
+    private var pendingPrompt: Pair<String, Boolean>? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var tts: TextToSpeech
     private val recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
 
     init {
+        tts = TextToSpeech(context.applicationContext) { status ->
+            ttsReady = status == TextToSpeech.SUCCESS
+            if (ttsReady) {
+                tts.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                )
+                tts.setSpeechRate(.92f)
+                pendingPrompt?.also { (text, korean) ->
+                    pendingPrompt = null
+                    speakNow(text, korean)
+                }
+            } else {
+                pendingPrompt = null
+                mainHandler.post { onUnavailable("음성 합성 엔진을 준비하지 못했습니다.") }
+            }
+        }
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) = onPromptFinished()
-            @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) = onPromptFinished()
+            override fun onDone(utteranceId: String?) { mainHandler.post(onPromptFinished) }
+            @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) {
+                mainHandler.post { onUnavailable("예문 음성을 재생하지 못했습니다. 휴대전화의 미디어 음량과 TTS 설정을 확인해 주세요.") }
+            }
         })
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
@@ -45,15 +71,32 @@ class SpeechEngine(
             override fun onPartialResults(partialResults: Bundle?) {
                 onPartialResult(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
             }
+            override fun onSegmentResults(segmentResults: Bundle) {
+                onPartialResult(segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
+            }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
     }
 
     fun speak(text: String, korean: Boolean) {
         recognizer?.cancel()
-        if (!ttsReady) { onUnavailable("음성 합성 엔진을 준비하지 못했습니다."); return }
-        tts.language = if (korean) Locale.KOREA else Locale.US
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "prompt")
+        if (!ttsReady) {
+            pendingPrompt = text to korean
+            return
+        }
+        speakNow(text, korean)
+    }
+
+    private fun speakNow(text: String, korean: Boolean) {
+        val languageResult = tts.setLanguage(if (korean) Locale.KOREA else Locale.US)
+        if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+            onUnavailable(if (korean) "한국어 TTS 음성이 설치되어 있지 않습니다." else "영어 TTS 음성이 설치되어 있지 않습니다.")
+            return
+        }
+        val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
+        if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "prompt") == TextToSpeech.ERROR) {
+            onUnavailable("예문 음성을 재생하지 못했습니다. 미디어 음량을 확인해 주세요.")
+        }
     }
 
     fun listen(expectedText: String) {
@@ -64,9 +107,10 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 550L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
             if (Build.VERSION.SDK_INT >= 33) {
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf(expectedText))
             }
@@ -74,6 +118,6 @@ class SpeechEngine(
         recognizer.startListening(intent)
     }
 
-    fun stop() { recognizer?.cancel(); tts.stop() }
-    fun destroy() { recognizer?.destroy(); tts.shutdown() }
+    fun stop() { pendingPrompt = null; recognizer?.cancel(); tts.stop() }
+    fun destroy() { pendingPrompt = null; recognizer?.destroy(); tts.shutdown() }
 }
