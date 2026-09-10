@@ -111,9 +111,12 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onPartialRecognition(candidates: List<String>) {
-        val expected = _state.value.current?.english ?: return
-        val best = candidates.filter(String::isNotBlank).maxByOrNull { SpeechScorer.score(expected, it) }.orEmpty()
-        if (best.isNotBlank()) _state.update { it.copy(liveText = best) }
+        // The first hypothesis is the recognizer's current best result. Avoid scoring
+        // every alternative on each partial callback so the UI can repaint immediately.
+        val latest = candidates.firstOrNull(String::isNotBlank).orEmpty()
+        if (latest.isNotBlank() && latest != _state.value.liveText) {
+            _state.update { it.copy(liveText = latest) }
+        }
     }
 
     fun retryListening() {

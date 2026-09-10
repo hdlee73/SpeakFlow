@@ -156,6 +156,9 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
                 Spacer(Modifier.height(10.dp))
                 Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
+                if (state.phase == LessonPhase.LISTENING && state.liveText.isNotBlank()) {
+                    Text("인식 중 · ${state.liveText}", color = Color(0xFF667085), fontSize = 13.sp, textAlign = TextAlign.Center)
+                }
             }
             if (state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.RETRYING) {
                 Spacer(Modifier.height(10.dp))
@@ -171,8 +174,10 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             }
             Spacer(Modifier.height(14.dp))
             when (state.phase) {
-                LessonPhase.CORRECT, LessonPhase.TIMED_OUT -> Button(onClick = onNext, shape = RoundedCornerShape(13.dp)) { Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장") }
-                LessonPhase.RETRYING -> Button(onClick = onRetry, shape = RoundedCornerShape(13.dp)) { Text("다시 말하기") }
+                LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onRetry, shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
+                    Button(onClick = onNext, shape = RoundedCornerShape(13.dp)) { Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장") }
+                }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = onReplay, shape = RoundedCornerShape(13.dp)) { Text("다시 듣기") }
                     OutlinedButton(onClick = onRestart, shape = RoundedCornerShape(13.dp)) { Text("처음부터") }
