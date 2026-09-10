@@ -2,6 +2,13 @@ package com.example.speakflow.model
 
 data class SentencePair(val korean: String, val english: String)
 
+data class SavedDataset(
+    val id: String,
+    val name: String,
+    val fileName: String,
+    val sentenceCount: Int
+)
+
 enum class LearningMode(val label: String, val description: String) {
     SHADOWING("영어 듣고 따라 말하기", "영어 예문을 듣고 그대로 말해요"),
     TRANSLATION("한국어 듣고 영어 말하기", "한국어 뜻을 듣고 영어로 말해요")
@@ -29,7 +36,10 @@ data class LearningUiState(
     val phase: LessonPhase = LessonPhase.IDLE,
     val settings: LearningSettings = LearningSettings(),
     val datasetName: String? = null,
+    val activeDatasetId: String? = null,
+    val savedDatasets: List<SavedDataset> = emptyList(),
     val heardText: String = "",
+    val liveText: String = "",
     val score: Int? = null,
     val remainingSeconds: Int = 0,
     val message: String? = null

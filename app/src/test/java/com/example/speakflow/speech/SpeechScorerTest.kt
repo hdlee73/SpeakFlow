@@ -5,6 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SpeechScorerTest {
+    @Test
+    fun `matches spoken words in expected order`() {
+        assertEquals(listOf(false, true, true, false), SpeechScorer.matchedWords("Does that mean I", "that mean"))
+    }
     @Test fun exactSentencePasses() = assertEquals(100, SpeechScorer.score("I'm ready.", "I'm ready"))
     @Test fun closeSentenceScoresHigherThanWrongSentence() {
         assertTrue(SpeechScorer.score("What if we wait for more time?", "What if we wait more time") >

@@ -15,11 +15,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.speakflow.model.*
 import com.example.speakflow.R
+import com.example.speakflow.speech.SpeechScorer
 
 private val Blue = Color(0xFF285BE6)
 private val Mint = Color(0xFF43C6A4)
@@ -30,9 +34,13 @@ private val Canvas = Color(0xFFF4F7FF)
 fun SpeakFlowApp(
     state: LearningUiState,
     settingsOpen: Boolean,
+    datasetsOpen: Boolean,
     onSettingsOpen: () -> Unit,
     onSettingsClose: () -> Unit,
     onSettingsSave: (LearningSettings) -> Unit,
+    onDatasetsOpen: () -> Unit,
+    onDatasetsClose: () -> Unit,
+    onDatasetSelect: (SavedDataset) -> Unit,
     onImport: () -> Unit,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
@@ -51,7 +59,7 @@ fun SpeakFlowApp(
             BoxWithConstraints(Modifier.fillMaxSize().padding(padding)) {
                 val expanded = maxWidth >= 600.dp
                 Column(Modifier.fillMaxSize()) {
-                    TopBar(state, onImport, onSettingsOpen)
+                    TopBar(state, onDatasetsOpen, onSettingsOpen)
                     LinearProgressIndicator(
                         progress = { state.progress },
                         modifier = Modifier.fillMaxWidth().height(4.dp),
@@ -66,6 +74,7 @@ fun SpeakFlowApp(
             }
         }
         if (settingsOpen) SettingsSheet(state.settings, onSettingsClose, onSettingsSave)
+        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onImport)
     }
 }
 
@@ -140,7 +149,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 Text("영어로 말해 보세요", color = Color(0xFF667085))
             } else {
                 val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
-                Text(item.english, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = if (state.phase == LessonPhase.CORRECT) Mint else Ink, textAlign = TextAlign.Center)
+                RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
                 Spacer(Modifier.height(8.dp))
                 Text(item.korean, fontSize = if (item.korean.length > 70) 13.sp else 15.sp, lineHeight = 20.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
             }
@@ -169,6 +178,54 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                     OutlinedButton(onClick = onRestart, shape = RoundedCornerShape(13.dp)) { Text("처음부터") }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RealtimeSentence(expected: String, liveText: String, fontSize: androidx.compose.ui.unit.TextUnit, lineHeight: androidx.compose.ui.unit.TextUnit) {
+    val words = SpeechScorer.displayWords(expected)
+    val matched = SpeechScorer.matchedWords(expected, liveText)
+    val styled = buildAnnotatedString {
+        words.forEachIndexed { index, word ->
+            if (index > 0) append(" ")
+            withStyle(SpanStyle(color = if (matched.getOrElse(index) { false }) Blue else Color(0xFFBFC2C7), fontWeight = if (matched.getOrElse(index) { false }) FontWeight.ExtraBold else FontWeight.Bold)) {
+                append(word)
+            }
+        }
+    }
+    Text(styled, fontSize = fontSize, lineHeight = lineHeight, textAlign = TextAlign.Center)
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatasetSheet(state: LearningUiState, onClose: () -> Unit, onSelect: (SavedDataset) -> Unit, onImport: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+            Text("내 데이터셋", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
+            Text("저장된 파일을 선택하면 바로 학습할 수 있어요.", color = Color(0xFF667085), fontSize = 13.sp)
+            Spacer(Modifier.height(16.dp))
+            state.savedDatasets.forEach { dataset ->
+                Surface(
+                    onClick = { onSelect(dataset) },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (dataset.id == state.activeDatasetId) Blue.copy(alpha = .10f) else Color(0xFFF5F7FA)
+                ) {
+                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_database), null, tint = Blue)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(dataset.name, fontWeight = FontWeight.SemiBold, color = Ink)
+                            Text("${dataset.sentenceCount}개 문장", fontSize = 12.sp, color = Color(0xFF667085))
+                        }
+                        if (dataset.id == state.activeDatasetId) Text("학습 중", color = Blue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+            }
+            if (state.savedDatasets.isEmpty()) Text("아직 저장된 데이터셋이 없습니다.", Modifier.padding(vertical = 20.dp), color = Color.Gray)
+            Spacer(Modifier.height(16.dp))
+            Button(onClick = onImport, Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) { Text("새 데이터셋 추가") }
         }
     }
 }

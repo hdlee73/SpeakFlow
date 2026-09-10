@@ -3,6 +3,33 @@ package com.example.speakflow.speech
 import java.util.Locale
 
 object SpeechScorer {
+    fun matchedWords(expected: String, actual: String): List<Boolean> {
+        val expectedWords = displayWords(expected)
+        val spokenWords = normalize(actual).split(' ').filter(String::isNotBlank)
+        val normalizedExpected = expectedWords.map(::normalize)
+        val matched = MutableList(expectedWords.size) { false }
+        var searchFrom = 0
+        spokenWords.forEach { spoken ->
+            var bestIndex = -1
+            var bestScore = 0
+            for (index in searchFrom until normalizedExpected.size) {
+                val candidateScore = similarity(normalizedExpected[index], spoken)
+                if (candidateScore > bestScore) {
+                    bestScore = candidateScore
+                    bestIndex = index
+                }
+                if (candidateScore == 100) break
+            }
+            if (bestIndex >= 0 && bestScore >= 72) {
+                matched[bestIndex] = true
+                searchFrom = bestIndex + 1
+            }
+        }
+        return matched
+    }
+
+    fun displayWords(value: String): List<String> = value.trim().split(Regex("\\s+")).filter(String::isNotBlank)
+
     fun score(expected: String, actual: String): Int {
         val left = normalize(expected)
         val right = normalize(actual)

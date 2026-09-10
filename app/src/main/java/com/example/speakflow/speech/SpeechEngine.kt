@@ -3,6 +3,7 @@ package com.example.speakflow.speech
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -13,6 +14,7 @@ import java.util.Locale
 class SpeechEngine(
     context: Context,
     private val onPromptFinished: () -> Unit,
+    private val onPartialResult: (List<String>) -> Unit,
     private val onResult: (List<String>) -> Unit,
     private val onUnavailable: (String) -> Unit
 ) {
@@ -40,7 +42,9 @@ class SpeechEngine(
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
-            override fun onPartialResults(partialResults: Bundle?) = Unit
+            override fun onPartialResults(partialResults: Bundle?) {
+                onPartialResult(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
+            }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
     }
@@ -52,15 +56,20 @@ class SpeechEngine(
         tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "prompt")
     }
 
-    fun listen() {
+    fun listen(expectedText: String) {
         if (recognizer == null) { onUnavailable("이 기기에서 음성 인식을 사용할 수 없습니다."); return }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_500L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
+            if (Build.VERSION.SDK_INT >= 33) {
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf(expectedText))
+                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_LATENCY)
+                putExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true)
+            }
         }
         recognizer.startListening(intent)
     }

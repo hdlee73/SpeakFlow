@@ -26,12 +26,14 @@ class MainActivity : ComponentActivity() {
         speech = SpeechEngine(
             context = this,
             onPromptFinished = viewModel::onPromptFinished,
+            onPartialResult = viewModel::onPartialRecognition,
             onResult = viewModel::onRecognition,
             onUnavailable = viewModel::onRecognitionUnavailable
         )
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
+            var datasetsOpen by rememberSaveable { mutableStateOf(false) }
             val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let(viewModel::importDataset)
             }
@@ -47,7 +49,7 @@ class MainActivity : ComponentActivity() {
                     }
                     LessonPhase.LISTENING -> {
                         if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                            speech.listen()
+                            speech.listen(state.current?.english.orEmpty())
                         } else micPermission.launch(Manifest.permission.RECORD_AUDIO)
                     }
                     LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE -> speech.stop()
@@ -58,10 +60,14 @@ class MainActivity : ComponentActivity() {
             SpeakFlowApp(
                 state = state,
                 settingsOpen = settingsOpen,
+                datasetsOpen = datasetsOpen,
                 onSettingsOpen = { settingsOpen = true },
                 onSettingsClose = { settingsOpen = false },
                 onSettingsSave = { viewModel.updateSettings(it); settingsOpen = false },
-                onImport = { filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },
+                onDatasetsOpen = { datasetsOpen = true },
+                onDatasetsClose = { datasetsOpen = false },
+                onDatasetSelect = { viewModel.selectDataset(it); datasetsOpen = false },
+                onImport = { datasetsOpen = false; filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },
                 onPlayPause = viewModel::togglePause,
                 onRestart = viewModel::restart,
                 onPrevious = viewModel::previous,

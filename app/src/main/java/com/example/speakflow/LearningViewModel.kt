@@ -7,6 +7,7 @@ import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.speakflow.data.DatasetParser
+import com.example.speakflow.data.DatasetStore
 import com.example.speakflow.model.*
 import com.example.speakflow.speech.SpeechScorer
 import kotlinx.coroutines.Job
@@ -20,14 +21,18 @@ import java.io.File
 
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = application.getSharedPreferences("learning", 0)
-    private val savedDataset = File(application.filesDir, "dataset")
-    private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration()))
+    private val datasetStore = DatasetStore(application)
+    private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration(), savedDatasets = datasetStore.list()))
     val state: StateFlow<LearningUiState> = _state.asStateFlow()
     private var timerJob: Job? = null
     private var deadline = 0L
 
     init {
-        if (savedDataset.exists()) loadSavedDataset()
+        val migrated = runCatching { datasetStore.migrateLegacy() }.getOrNull()
+        val datasets = datasetStore.list()
+        _state.update { it.copy(savedDatasets = datasets) }
+        val selectedId = prefs.getString("active_dataset_id", null)
+        (datasets.firstOrNull { it.id == selectedId } ?: migrated ?: datasets.firstOrNull())?.let(::selectDataset)
     }
 
     fun importDataset(uri: Uri) {
@@ -38,28 +43,30 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                     if (it.moveToFirst()) it.getString(0) else null
                 } ?: "dataset.xlsx"
                 runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                resolver.openInputStream(uri)!!.use { source -> savedDataset.outputStream().use(source::copyTo) }
-                prefs.edit().putString("dataset_name", name).apply()
-                val items = savedDataset.inputStream().use { DatasetParser.parse(it, name) }
-                resetWith(items, name)
+                val (saved, items) = datasetStore.import(uri, name)
+                prefs.edit().putString("active_dataset_id", saved.id).apply()
+                _state.update { it.copy(savedDatasets = datasetStore.list()) }
+                resetWith(items, saved.name, saved.id)
             }.onFailure { error ->
                 _state.update { it.copy(message = error.message ?: "파일을 읽지 못했습니다.") }
             }
         }
     }
 
-    private fun loadSavedDataset() {
+    fun selectDataset(dataset: SavedDataset) {
         viewModelScope.launch {
-            val name = prefs.getString("dataset_name", "dataset.xlsx")!!
-            runCatching { savedDataset.inputStream().use { DatasetParser.parse(it, name) } }
-                .onSuccess { resetWith(it, name) }
+            runCatching { datasetStore.load(dataset) }
+                .onSuccess {
+                    prefs.edit().putString("active_dataset_id", dataset.id).apply()
+                    resetWith(it, dataset.name, dataset.id)
+                }
                 .onFailure { _state.update { state -> state.copy(message = "저장된 데이터셋을 다시 불러오지 못했습니다.") } }
         }
     }
 
-    private fun resetWith(items: List<SentencePair>, name: String) {
+    private fun resetWith(items: List<SentencePair>, name: String, id: String) {
         val order = buildOrder(items.size, _state.value.settings.order)
-        _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, message = null) }
+        _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id, message = null) }
     }
 
     fun updateSettings(settings: LearningSettings) {
@@ -79,7 +86,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     fun startSpeaking() {
         if (_state.value.current == null) return
         timerJob?.cancel()
-        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", score = null, message = null) }
+        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, message = null) }
     }
 
     fun onPromptFinished() {
@@ -97,10 +104,16 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val text = best?.first.orEmpty()
         val score = best?.second ?: 0
         if (score >= _state.value.settings.passScore) {
-            _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, score = score) }
+            _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, liveText = text, score = score) }
         } else {
-            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, score = score, remainingSeconds = 0) }
+            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = 0) }
         }
+    }
+
+    fun onPartialRecognition(candidates: List<String>) {
+        val expected = _state.value.current?.english ?: return
+        val best = candidates.filter(String::isNotBlank).maxByOrNull { SpeechScorer.score(expected, it) }.orEmpty()
+        if (best.isNotBlank()) _state.update { it.copy(liveText = best) }
     }
 
     fun retryListening() {
@@ -131,7 +144,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         _state.update {
             if (it.position >= it.order.lastIndex) it.copy(phase = LessonPhase.COMPLETE, remainingSeconds = 0)
-            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", score = null, remainingSeconds = 0)
+            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, remainingSeconds = 0)
         }
     }
 
@@ -140,7 +153,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         _state.update {
             if (it.items.isEmpty()) it.copy(message = "먼저 엑셀 데이터셋을 불러오세요.")
             else it.copy(order = buildOrder(it.items.size, it.settings.order), position = 0, phase = LessonPhase.SPEAKING,
-                heardText = "", score = null, remainingSeconds = 0)
+                heardText = "", liveText = "", score = null, remainingSeconds = 0)
         }
     }
 
