@@ -133,50 +133,40 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
         shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Column(
-            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = if (expanded) 32.dp else 22.dp, vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            Modifier.fillMaxSize().padding(horizontal = if (expanded) 32.dp else 22.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Surface(color = statusColor, shape = RoundedCornerShape(9.dp)) {
-                Text(statusLabel(state), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(16.dp))
-            val revealEnglish = !translation || state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.TIMED_OUT
-            if (!revealEnglish) {
-                val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
-                Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(8.dp))
-                Text("영어로 말해 보세요", color = Color(0xFF667085))
-            } else {
-                val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
-                RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
-                Spacer(Modifier.height(8.dp))
-                Text(item.korean, fontSize = if (item.korean.length > 70) 13.sp else 15.sp, lineHeight = 20.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
-            }
-            if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
-                Spacer(Modifier.height(10.dp))
-                Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
-                if (state.phase == LessonPhase.LISTENING && state.liveText.isNotBlank()) {
-                    Text("인식 중 · ${state.liveText}", color = Color(0xFF667085), fontSize = 13.sp, textAlign = TextAlign.Center)
+            Column(
+                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Surface(color = statusColor, shape = RoundedCornerShape(9.dp)) {
+                    Text(statusLabel(state), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(16.dp))
+                val revealEnglish = !translation || state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.TIMED_OUT
+                if (!revealEnglish) {
+                    val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
+                    Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(8.dp))
+                    Text("영어로 말해 보세요", color = Color(0xFF667085))
+                } else {
+                    val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
+                    RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
+                    Spacer(Modifier.height(8.dp))
+                    Text(item.korean, fontSize = if (item.korean.length > 70) 13.sp else 15.sp, lineHeight = 20.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
+                }
+                if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
+                    Spacer(Modifier.height(10.dp))
+                    Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
                 }
             }
-            if (state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.RETRYING) {
-                Spacer(Modifier.height(10.dp))
-                Surface(color = statusColor.copy(alpha = .09f), shape = RoundedCornerShape(12.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("내가 말한 내용", fontSize = 12.sp, color = Color(0xFF667085))
-                        Spacer(Modifier.height(3.dp))
-                        Text(if (state.heardText.isBlank()) "인식된 음성이 없습니다" else state.heardText,
-                            fontSize = 15.sp, lineHeight = 20.sp, fontWeight = FontWeight.SemiBold, color = Ink, textAlign = TextAlign.Center)
-                        state.score?.let { Text("유사도 ${it}점", fontSize = 12.sp, color = if (state.phase == LessonPhase.CORRECT) Mint else Color(0xFFE56B5D)) }
-                    }
-                }
-            }
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(10.dp))
             when (state.phase) {
-                LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = onRetry, shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
-                    Button(onClick = onNext, shape = RoundedCornerShape(13.dp)) { Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장") }
+                LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
+                    Button(onClick = onNext, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장") }
                 }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = onReplay, shape = RoundedCornerShape(13.dp)) { Text("다시 듣기") }
