@@ -122,7 +122,8 @@ class SpeechEngine(
     }
 
     fun listen(expectedText: String) {
-        if (recognizer == null) { onUnavailable("이 기기에서 음성 인식을 사용할 수 없습니다."); return }
+        val speechRecognizer = recognizer
+            ?: run { onUnavailable("이 기기에서 음성 인식을 사용할 수 없습니다."); return }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
@@ -142,7 +143,7 @@ class SpeechEngine(
         pendingListen = Runnable {
             pendingListen = null
             acceptingRecognitionResults = true
-            runCatching { recognizer.startListening(intent) }.onFailure {
+            runCatching { speechRecognizer.startListening(intent) }.onFailure {
                 acceptingRecognitionResults = false
                 restoreAudioRoute()
                 onUnavailable("마이크를 시작하지 못했습니다. 오디오 권한과 블루투스 연결을 확인해 주세요.")
