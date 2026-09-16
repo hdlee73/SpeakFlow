@@ -21,4 +21,14 @@ class DatasetParserTest {
         ))
         assertEquals(2, pairs.size)
     }
+
+    @Test fun ignoresColumnsAfterKoreanAndEnglish() {
+        val pairs = DatasetParser.rowsToPairs(listOf(
+            listOf("안녕하세요", "Hello", "메모", "무시할 값"),
+            listOf("감사합니다", "Thank you", "difficulty=easy")
+        ))
+        assertEquals(2, pairs.size)
+        assertEquals("Hello", pairs[0].english)
+        assertEquals("Thank you", pairs[1].english)
+    }
 }

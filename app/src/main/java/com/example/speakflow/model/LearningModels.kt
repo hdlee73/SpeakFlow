@@ -26,6 +26,7 @@ data class LearningSettings(
     val mode: LearningMode = LearningMode.SHADOWING,
     val order: PlayOrder = PlayOrder.SEQUENTIAL,
     val repeatCount: Int = 1,
+    val autoAdvanceSentence: Boolean = false,
     val timeoutSeconds: Int = 10,
     val passScore: Int = 78
 )
@@ -47,4 +48,6 @@ data class LearningUiState(
 ) {
     val current: SentencePair? get() = order.getOrNull(position)?.let(items::getOrNull)
     val progress: Float get() = if (order.isEmpty()) 0f else (position + 1f) / order.size
+    val repeatNumber: Int get() = if (order.isEmpty()) 0 else position % settings.repeatCount.coerceAtLeast(1) + 1
+    val hasAnotherRepeat: Boolean get() = order.getOrNull(position) == order.getOrNull(position + 1)
 }

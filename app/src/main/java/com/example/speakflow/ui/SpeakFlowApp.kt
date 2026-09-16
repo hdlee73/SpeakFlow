@@ -141,8 +141,15 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Surface(color = statusColor, shape = RoundedCornerShape(9.dp)) {
-                    Text(statusLabel(state), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(color = statusColor, shape = RoundedCornerShape(9.dp)) {
+                        Text(statusLabel(state), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    if (state.settings.repeatCount > 1) {
+                        Surface(color = Blue.copy(alpha = .10f), shape = RoundedCornerShape(9.dp)) {
+                            Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
                 Spacer(Modifier.height(16.dp))
                 val revealEnglish = !translation || state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.TIMED_OUT
@@ -150,12 +157,27 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(8.dp))
-                    Text("영어로 말해 보세요", color = Color(0xFF667085))
+                    Text(maskedEnglishHint(item.english), fontSize = 14.sp, lineHeight = 20.sp, color = Color(0xFF8A94A6), textAlign = TextAlign.Center)
                 } else {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
                     RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
                     Spacer(Modifier.height(8.dp))
-                    Text(item.korean, fontSize = if (item.korean.length > 70) 13.sp else 15.sp, lineHeight = 20.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
+                    Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
+                }
+                state.score?.let { score ->
+                    Spacer(Modifier.height(12.dp))
+                    Surface(
+                        color = if (score >= state.settings.passScore) Mint.copy(alpha = .16f) else Color(0xFFFFE8CC),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            "직전 발음 점수  ${score}점",
+                            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            color = if (score >= state.settings.passScore) Color(0xFF087F5B) else Color(0xFFB45309),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 14.sp
+                        )
+                    }
                 }
                 if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
                     Spacer(Modifier.height(10.dp))
@@ -166,7 +188,13 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             when (state.phase) {
                 LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
-                    Button(onClick = onNext, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장") }
+                    Button(onClick = onNext, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) {
+                        Text(when {
+                            state.hasAnotherRepeat -> "다음 반복"
+                            state.position == state.order.lastIndex -> "학습 완료"
+                            else -> "다음 문장"
+                        })
+                    }
                 }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilledTonalButton(onClick = onReplay, shape = RoundedCornerShape(13.dp)) { Text("다시 듣기") }
@@ -190,6 +218,14 @@ private fun RealtimeSentence(expected: String, liveText: String, fontSize: andro
         }
     }
     Text(styled, fontSize = fontSize, lineHeight = lineHeight, textAlign = TextAlign.Center)
+}
+
+private fun maskedEnglishHint(english: String): String {
+    val words = SpeechScorer.displayWords(english)
+    return words.mapIndexed { index, word ->
+        val hide = if (words.size <= 2) index == words.lastIndex else index % 3 == 1
+        if (hide) word.map { char -> if (char.isLetterOrDigit()) '_' else char }.joinToString("") else word
+    }.joinToString(" ")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -228,7 +264,11 @@ private fun DatasetSheet(state: LearningUiState, onClose: () -> Unit, onSelect: 
 private fun statusLabel(state: LearningUiState) = when (state.phase) {
     LessonPhase.SPEAKING -> "🔊 들어 보세요"
     LessonPhase.LISTENING -> "🎙 Speak now"
-    LessonPhase.CORRECT -> "✓ Nice"
+    LessonPhase.CORRECT -> when {
+        state.hasAnotherRepeat -> "✓ 통과 · 다음 반복"
+        state.settings.autoAdvanceSentence -> "✓ 통과 · 자동 이동"
+        else -> "✓ Nice"
+    }
     LessonPhase.RETRYING -> "한 번 더 말해 보세요"
     LessonPhase.TIMED_OUT -> "다음 문장으로 이동"
     LessonPhase.PAUSED -> "일시 정지"
@@ -305,14 +345,31 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                     }
                 }
                 Spacer(Modifier.height(18.dp))
-                Text("자동 넘김: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
+                Text("통과 후 다음 문장", fontWeight = FontWeight.Bold)
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(if (draft.autoAdvanceSentence) "자동으로 이동" else "버튼을 눌러 수동 이동")
+                        Text("반복 연습 중에는 통과하면 다음 반복으로 자동 이동합니다.", color = Color.Gray, fontSize = 12.sp)
+                    }
+                    Switch(
+                        checked = draft.autoAdvanceSentence,
+                        onCheckedChange = { draft = draft.copy(autoAdvanceSentence = it) }
+                    )
+                }
+                Spacer(Modifier.height(18.dp))
+                Text("발음 제한 시간: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
                 Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
                 Text("통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
                 Slider(value = draft.passScore.toFloat(), onValueChange = { draft = draft.copy(passScore = it.toInt()) }, valueRange = 55f..95f, steps = 7)
                 Spacer(Modifier.height(12.dp))
             }
-            Button(onClick = { onSave(draft) }, Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) { Text("설정 저장") }
-            Spacer(Modifier.height(16.dp))
+            Surface(shadowElevation = 10.dp, color = Color.White) {
+                Column(Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 16.dp)) {
+                    Button(onClick = { onSave(draft) }, Modifier.fillMaxWidth().height(58.dp), shape = RoundedCornerShape(16.dp)) {
+                        Text("설정 저장하기", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
         }
     }
 }

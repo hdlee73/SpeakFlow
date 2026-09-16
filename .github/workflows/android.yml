@@ -9,7 +9,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-java@v5
@@ -24,3 +24,30 @@ jobs:
         with:
           name: SpeakFlow-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Publish installable APK release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          tag="v${version}"
+          apk="SpeakFlow-${tag}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$apk"
+          cat > release-notes.md <<'EOF'
+          ## 주요 개선 사항
+
+          - 발음 시작 직후 남은 시간이 0초로 표시되는 음성인식 콜백 문제 수정
+          - 짧은 침묵으로 인식이 일찍 끝나도 제한시간 동안 자동으로 듣기 재개
+          - 문장별 1~5회 반복 선택 및 통과 시 다음 반복 자동 이동
+          - 마지막 반복 통과 후 다음 문장 자동/수동 이동 옵션 추가
+          - 설정 저장 버튼을 화면 하단에 크고 선명하게 고정
+          - 데이터셋 C열 이후 데이터를 무시하도록 명확화
+          - 한국어 듣기 모드에 일부 단어를 가린 영어 힌트 표시
+          - 영어 듣기 모드의 한국어 해석 글자 크기 축소
+          - 발음 결과 점수를 학습 카드에 표시
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$apk" --clobber
+          else
+            gh release create "$tag" "$apk" --target "$GITHUB_SHA" --title "SpeakFlow $tag" --notes-file release-notes.md
+          fi

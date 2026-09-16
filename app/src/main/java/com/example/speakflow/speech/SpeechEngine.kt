@@ -22,6 +22,7 @@ class SpeechEngine(
     private val onUnavailable: (String) -> Unit
 ) {
     private var ttsReady = false
+    private var acceptingRecognitionResults = false
     private var pendingPrompt: Pair<String, Boolean>? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var tts: TextToSpeech
@@ -56,10 +57,14 @@ class SpeechEngine(
         })
         recognizer?.setRecognitionListener(object : RecognitionListener {
             override fun onResults(results: Bundle) {
+                if (!acceptingRecognitionResults) return
+                acceptingRecognitionResults = false
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 onResult(matches.orEmpty())
             }
             override fun onError(error: Int) {
+                if (!acceptingRecognitionResults) return
+                acceptingRecognitionResults = false
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) onUnavailable("마이크 권한이 필요합니다.")
                 else onResult(emptyList())
             }
@@ -69,9 +74,11 @@ class SpeechEngine(
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
             override fun onPartialResults(partialResults: Bundle?) {
+                if (!acceptingRecognitionResults) return
                 onPartialResult(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
             }
             override fun onSegmentResults(segmentResults: Bundle) {
+                if (!acceptingRecognitionResults) return
                 onPartialResult(segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
             }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
@@ -79,6 +86,7 @@ class SpeechEngine(
     }
 
     fun speak(text: String, korean: Boolean) {
+        acceptingRecognitionResults = false
         recognizer?.cancel()
         if (!ttsReady) {
             pendingPrompt = text to korean
@@ -108,16 +116,17 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 300L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 550L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 800L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
             if (Build.VERSION.SDK_INT >= 33) {
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf(expectedText))
             }
         }
+        acceptingRecognitionResults = true
         recognizer.startListening(intent)
     }
 
-    fun stop() { pendingPrompt = null; recognizer?.cancel(); tts.stop() }
-    fun destroy() { pendingPrompt = null; recognizer?.destroy(); tts.shutdown() }
+    fun stop() { pendingPrompt = null; acceptingRecognitionResults = false; recognizer?.cancel(); tts.stop() }
+    fun destroy() { pendingPrompt = null; acceptingRecognitionResults = false; recognizer?.destroy(); tts.shutdown() }
 }

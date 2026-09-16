@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
                             speech.listen(state.current?.english.orEmpty())
                         } else micPermission.launch(Manifest.permission.RECORD_AUDIO)
                     }
-                    LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE -> speech.stop()
+                    LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE, LessonPhase.TIMED_OUT -> speech.stop()
                     else -> Unit
                 }
             }

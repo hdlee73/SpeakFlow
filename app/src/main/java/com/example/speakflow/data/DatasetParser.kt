@@ -39,7 +39,9 @@ object DatasetParser {
     }
 
     internal fun rowsToPairs(source: List<List<String>>): List<SentencePair> {
-        val rows = source.map { row -> row.map(String::trim) }.filter { it.any(String::isNotBlank) }
+        // Only A (Korean) and B (English) define a sentence pair. Extra columns may
+        // contain notes, categories, or formulas and are intentionally ignored.
+        val rows = source.map { row -> row.take(2).map(String::trim) }.filter { it.any(String::isNotBlank) }
         require(rows.any { it.size >= 2 }) {
             "A열의 한국어와 B열의 영어 문장이 필요합니다."
         }

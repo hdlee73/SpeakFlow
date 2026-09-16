@@ -25,6 +25,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration(), savedDatasets = datasetStore.list()))
     val state: StateFlow<LearningUiState> = _state.asStateFlow()
     private var timerJob: Job? = null
+    private var advanceJob: Job? = null
     private var deadline = 0L
 
     init {
@@ -65,6 +66,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun resetWith(items: List<SentencePair>, name: String, id: String) {
+        timerJob?.cancel()
+        advanceJob?.cancel()
         val order = buildOrder(items.size, _state.value.settings.order, _state.value.settings.repeatCount)
         _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id, message = null) }
     }
@@ -74,10 +77,12 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putString("mode", settings.mode.name)
             .putString("order", settings.order.name)
             .putInt("repeat_count", settings.repeatCount)
+            .putBoolean("auto_advance_sentence", settings.autoAdvanceSentence)
             .putInt("timeout", settings.timeoutSeconds)
             .putInt("pass_score", settings.passScore)
             .apply()
         timerJob?.cancel()
+        advanceJob?.cancel()
         _state.update {
             it.copy(settings = settings, order = buildOrder(it.items.size, settings.order, settings.repeatCount), position = 0,
                 phase = LessonPhase.IDLE, heardText = "", score = null, remainingSeconds = 0)
@@ -87,18 +92,22 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     fun startSpeaking() {
         if (_state.value.current == null) return
         timerJob?.cancel()
+        advanceJob?.cancel()
         _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, message = null) }
     }
 
     fun onPromptFinished() {
+        if (_state.value.phase != LessonPhase.SPEAKING) return
         deadline = System.currentTimeMillis() + _state.value.settings.timeoutSeconds * 1_000L
         _state.update { it.copy(phase = LessonPhase.LISTENING, remainingSeconds = it.settings.timeoutSeconds) }
         startTimer()
     }
 
     fun onRecognition(candidates: List<String>) {
+        // cancel() can deliver a late recognizer callback while TTS is already playing.
+        // It belongs to the previous session and must not turn the new countdown into 0.
+        if (_state.value.phase != LessonPhase.LISTENING) return
         val expected = _state.value.current?.english ?: return
-        timerJob?.cancel()
         val remaining = ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt().coerceAtLeast(0)
         val best = candidates.filter(String::isNotBlank)
             .map { it to SpeechScorer.score(expected, it) }
@@ -106,15 +115,37 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val text = best?.first.orEmpty()
         val score = best?.second ?: 0
         if (score >= _state.value.settings.passScore) {
+            timerJob?.cancel()
             _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, liveText = text, score = score) }
+            val shouldAdvance = _state.value.hasAnotherRepeat || _state.value.settings.autoAdvanceSentence
+            if (shouldAdvance) {
+                advanceJob?.cancel()
+                advanceJob = viewModelScope.launch {
+                    delay(900)
+                    if (_state.value.phase == LessonPhase.CORRECT) next()
+                }
+            }
         } else {
-            // Recognition services can finish a listening session after a short pause.
-            // Preserve the real countdown instead of incorrectly jumping to 0 seconds.
-            _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = remaining) }
+            // Some recognition services finalize after a short pause. Keep the original
+            // deadline and reopen the microphone instead of ending the whole attempt.
+            if (remaining <= 0) {
+                timerJob?.cancel()
+                _state.update { it.copy(phase = LessonPhase.TIMED_OUT, heardText = text, liveText = text, score = score, remainingSeconds = 0) }
+            } else {
+                _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = remaining) }
+                advanceJob?.cancel()
+                advanceJob = viewModelScope.launch {
+                    delay(300)
+                    if (_state.value.phase == LessonPhase.RETRYING && deadline > System.currentTimeMillis()) {
+                        _state.update { it.copy(phase = LessonPhase.LISTENING) }
+                    }
+                }
+            }
         }
     }
 
     fun onPartialRecognition(candidates: List<String>) {
+        if (_state.value.phase != LessonPhase.LISTENING) return
         // The first hypothesis is the recognizer's current best result. Avoid scoring
         // every alternative on each partial callback so the UI can repaint immediately.
         val latest = candidates.firstOrNull(String::isNotBlank).orEmpty()
@@ -124,6 +155,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun retryListening() {
+        advanceJob?.cancel()
         deadline = System.currentTimeMillis() + _state.value.settings.timeoutSeconds * 1_000L
         _state.update { it.copy(phase = LessonPhase.LISTENING, remainingSeconds = it.settings.timeoutSeconds) }
         startTimer()
@@ -138,17 +170,19 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         when (_state.value.phase) {
             LessonPhase.PAUSED -> startSpeaking()
             LessonPhase.IDLE, LessonPhase.COMPLETE -> restart()
-            else -> { timerJob?.cancel(); _state.update { it.copy(phase = LessonPhase.PAUSED) } }
+            else -> { timerJob?.cancel(); advanceJob?.cancel(); _state.update { it.copy(phase = LessonPhase.PAUSED) } }
         }
     }
 
     fun previous() {
         timerJob?.cancel()
+        advanceJob?.cancel()
         _state.update { it.copy(position = (it.position - 1).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", score = null) }
     }
 
     fun next() {
         timerJob?.cancel()
+        advanceJob?.cancel()
         _state.update {
             if (it.position >= it.order.lastIndex) it.copy(phase = LessonPhase.COMPLETE, remainingSeconds = 0)
             else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, remainingSeconds = 0)
@@ -157,6 +191,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
 
     fun restart() {
         timerJob?.cancel()
+        advanceJob?.cancel()
         _state.update {
             if (it.items.isEmpty()) it.copy(message = "먼저 엑셀 데이터셋을 불러오세요.")
             else it.copy(order = buildOrder(it.items.size, it.settings.order, it.settings.repeatCount), position = 0, phase = LessonPhase.SPEAKING,
@@ -187,6 +222,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         mode = runCatching { LearningMode.valueOf(prefs.getString("mode", null) ?: "SHADOWING") }.getOrDefault(LearningMode.SHADOWING),
         order = runCatching { PlayOrder.valueOf(prefs.getString("order", null) ?: "SEQUENTIAL") }.getOrDefault(PlayOrder.SEQUENTIAL),
         repeatCount = prefs.getInt("repeat_count", 1).coerceIn(1, 5),
+        autoAdvanceSentence = prefs.getBoolean("auto_advance_sentence", false),
         timeoutSeconds = prefs.getInt("timeout", 20),
         passScore = prefs.getInt("pass_score", 68)
         )
