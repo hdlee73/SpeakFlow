@@ -20,6 +20,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
+    private companion object {
+        const val RESULT_DISPLAY_MILLIS = 2_500L
+    }
     private val prefs = application.getSharedPreferences("learning", 0)
     private val datasetStore = DatasetStore(application)
     private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration(), savedDatasets = datasetStore.list()))
@@ -62,6 +65,32 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                     resetWith(it, dataset.name, dataset.id)
                 }
                 .onFailure { _state.update { state -> state.copy(message = "저장된 데이터셋을 다시 불러오지 못했습니다.") } }
+        }
+    }
+
+    fun deleteDataset(dataset: SavedDataset) {
+        timerJob?.cancel()
+        advanceJob?.cancel()
+        datasetStore.delete(dataset)
+        val remaining = datasetStore.list()
+        if (_state.value.activeDatasetId == dataset.id) {
+            prefs.edit().remove("active_dataset_id").apply()
+            val replacement = remaining.firstOrNull()
+            if (replacement != null) {
+                _state.update { it.copy(savedDatasets = remaining, message = "데이터셋을 삭제했습니다.") }
+                selectDataset(replacement)
+            } else {
+                _state.update {
+                    it.copy(
+                        items = emptyList(), order = emptyList(), position = 0,
+                        phase = LessonPhase.IDLE, datasetName = null, activeDatasetId = null,
+                        savedDatasets = emptyList(), heardText = "", liveText = "", score = null,
+                        remainingSeconds = 0, message = "데이터셋을 삭제했습니다."
+                    )
+                }
+            }
+        } else {
+            _state.update { it.copy(savedDatasets = remaining, message = "데이터셋을 삭제했습니다.") }
         }
     }
 
@@ -121,7 +150,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             if (shouldAdvance) {
                 advanceJob?.cancel()
                 advanceJob = viewModelScope.launch {
-                    delay(900)
+                    delay(RESULT_DISPLAY_MILLIS)
                     if (_state.value.phase == LessonPhase.CORRECT) next()
                 }
             }

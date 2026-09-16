@@ -41,6 +41,7 @@ fun SpeakFlowApp(
     onDatasetsOpen: () -> Unit,
     onDatasetsClose: () -> Unit,
     onDatasetSelect: (SavedDataset) -> Unit,
+    onDatasetDelete: (SavedDataset) -> Unit,
     onImport: () -> Unit,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
@@ -74,7 +75,7 @@ fun SpeakFlowApp(
             }
         }
         if (settingsOpen) SettingsSheet(state.settings, onSettingsClose, onSettingsSave)
-        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onImport)
+        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport)
     }
 }
 
@@ -111,7 +112,7 @@ private fun EmptyState(onImport: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Text("나만의 문장으로 말하기 연습", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
             Spacer(Modifier.height(10.dp))
-            Text("첫 번째 열은 한국어, 두 번째 열은 영어인 Excel(.xlsx) 또는 CSV 파일을 불러오세요.", color = Color(0xFF667085), textAlign = TextAlign.Center)
+            Text("첫 두 열에 한국어와 영어가 있는 Excel(.xlsx) 또는 CSV 파일을 불러오세요. 열 순서는 자동으로 인식합니다.", color = Color(0xFF667085), textAlign = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
             Button(onClick = onImport, shape = RoundedCornerShape(14.dp)) { Text("데이터셋 불러오기") }
         }
@@ -136,22 +137,13 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             Modifier.fillMaxSize().padding(horizontal = if (expanded) 32.dp else 22.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            LessonStatusHeader(state, statusColor)
+            Spacer(Modifier.height(12.dp))
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(color = statusColor, shape = RoundedCornerShape(9.dp)) {
-                        Text(statusLabel(state), Modifier.padding(horizontal = 12.dp, vertical = 5.dp), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-                    if (state.settings.repeatCount > 1) {
-                        Surface(color = Blue.copy(alpha = .10f), shape = RoundedCornerShape(9.dp)) {
-                            Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
                 val revealEnglish = !translation || state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.TIMED_OUT
                 if (!revealEnglish) {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
@@ -206,6 +198,39 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
 }
 
 @Composable
+private fun LessonStatusHeader(state: LearningUiState, statusColor: Color) {
+    Row(
+        Modifier.fillMaxWidth().height(40.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(
+            modifier = Modifier.width(160.dp).fillMaxHeight(),
+            color = statusColor,
+            shape = RoundedCornerShape(10.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Text(statusLabel(state), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Box(Modifier.width(94.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
+            if (state.settings.repeatCount > 1) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Blue.copy(alpha = .10f),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun RealtimeSentence(expected: String, liveText: String, fontSize: androidx.compose.ui.unit.TextUnit, lineHeight: androidx.compose.ui.unit.TextUnit) {
     val words = SpeechScorer.displayWords(expected)
     val matched = SpeechScorer.matchedWords(expected, liveText)
@@ -230,7 +255,14 @@ private fun maskedEnglishHint(english: String): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DatasetSheet(state: LearningUiState, onClose: () -> Unit, onSelect: (SavedDataset) -> Unit, onImport: () -> Unit) {
+private fun DatasetSheet(
+    state: LearningUiState,
+    onClose: () -> Unit,
+    onSelect: (SavedDataset) -> Unit,
+    onDelete: (SavedDataset) -> Unit,
+    onImport: () -> Unit
+) {
+    var pendingDelete by remember { mutableStateOf<SavedDataset?>(null) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("내 데이터셋", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -251,6 +283,11 @@ private fun DatasetSheet(state: LearningUiState, onClose: () -> Unit, onSelect: 
                             Text("${dataset.sentenceCount}개 문장", fontSize = 12.sp, color = Color(0xFF667085))
                         }
                         if (dataset.id == state.activeDatasetId) Text("학습 중", color = Blue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        TextButton(
+                            onClick = { pendingDelete = dataset },
+                            colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFD92D20)),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) { Text("삭제", fontWeight = FontWeight.Bold) }
                     }
                 }
             }
@@ -258,6 +295,19 @@ private fun DatasetSheet(state: LearningUiState, onClose: () -> Unit, onSelect: 
             Spacer(Modifier.height(16.dp))
             Button(onClick = onImport, Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(14.dp)) { Text("새 데이터셋 추가") }
         }
+    }
+    pendingDelete?.let { dataset ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("데이터셋 삭제") },
+            text = { Text("‘${dataset.name}’ 데이터셋을 삭제할까요? 삭제한 파일은 복구할 수 없습니다.") },
+            confirmButton = {
+                TextButton(onClick = { onDelete(dataset); pendingDelete = null }) {
+                    Text("삭제", color = Color(0xFFD92D20), fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("취소") } }
+        )
     }
 }
 

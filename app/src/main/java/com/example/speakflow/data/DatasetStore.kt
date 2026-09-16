@@ -38,6 +38,11 @@ class DatasetStore(private val context: Context) {
     fun load(dataset: SavedDataset): List<SentencePair> =
         File(directory, dataset.fileName).inputStream().use { DatasetParser.parse(it, dataset.name) }
 
+    fun delete(dataset: SavedDataset) {
+        File(directory, dataset.fileName).delete()
+        saveIndex(list().filterNot { it.id == dataset.id })
+    }
+
     fun migrateLegacy(): SavedDataset? {
         if (list().isNotEmpty()) return null
         val legacy = File(context.filesDir, "dataset")

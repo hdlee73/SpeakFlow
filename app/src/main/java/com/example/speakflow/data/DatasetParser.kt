@@ -39,15 +39,18 @@ object DatasetParser {
     }
 
     internal fun rowsToPairs(source: List<List<String>>): List<SentencePair> {
-        // Only A (Korean) and B (English) define a sentence pair. Extra columns may
-        // contain notes, categories, or formulas and are intentionally ignored.
-        val rows = source.map { row -> row.take(2).map(String::trim) }.filter { it.any(String::isNotBlank) }
+        // Only the first two columns define a sentence pair. Detect which column is
+        // Korean so both Korean-English and English-Korean files work automatically.
+        val rows = source.map { row -> row.take(2).map { it.trim().trim('\uFEFF') } }.filter { it.any(String::isNotBlank) }
         require(rows.any { it.size >= 2 }) {
-            "A열의 한국어와 B열의 영어 문장이 필요합니다."
+            "첫 번째와 두 번째 열에 한국어와 영어 문장이 필요합니다."
         }
+        val englishFirst = languageOrderScore(rows, englishFirst = true) > languageOrderScore(rows, englishFirst = false)
 
         return rows.mapNotNull { row ->
-            pairOrNull(row.getOrElse(0) { "" }, row.getOrElse(1) { "" })
+            val first = row.getOrElse(0) { "" }
+            val second = row.getOrElse(1) { "" }
+            if (englishFirst) pairOrNull(second, first) else pairOrNull(first, second)
         }.dropWhile { pair ->
             val ko = pair.korean.lowercase()
             val en = pair.english.lowercase()
@@ -57,6 +60,15 @@ object DatasetParser {
 
     private fun pairOrNull(korean: String, english: String): SentencePair? =
         if (korean.isBlank() || english.isBlank()) null else SentencePair(korean, english)
+
+    private fun languageOrderScore(rows: List<List<String>>, englishFirst: Boolean): Int = rows.sumOf { row ->
+        val first = row.getOrElse(0) { "" }
+        val second = row.getOrElse(1) { "" }
+        val english = if (englishFirst) first else second
+        val korean = if (englishFirst) second else first
+        english.count { it in 'A'..'Z' || it in 'a'..'z' } +
+            korean.count { it in '\u1100'..'\u11FF' || it in '\u3130'..'\u318F' || it in '\uAC00'..'\uD7A3' }
+    }
 
     private fun readSharedStrings(bytes: ByteArray): List<String> {
         val result = mutableListOf<String>()

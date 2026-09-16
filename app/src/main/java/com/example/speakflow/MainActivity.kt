@@ -11,6 +11,9 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.speakflow.model.LearningMode
 import com.example.speakflow.model.LessonPhase
@@ -23,6 +26,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        hideStatusBar()
         speech = SpeechEngine(
             context = this,
             onPromptFinished = viewModel::onPromptFinished,
@@ -67,6 +71,7 @@ class MainActivity : ComponentActivity() {
                 onDatasetsOpen = { datasetsOpen = true },
                 onDatasetsClose = { datasetsOpen = false },
                 onDatasetSelect = { viewModel.selectDataset(it); datasetsOpen = false },
+                onDatasetDelete = viewModel::deleteDataset,
                 onImport = { datasetsOpen = false; filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },
                 onPlayPause = viewModel::togglePause,
                 onRestart = viewModel::restart,
@@ -76,6 +81,19 @@ class MainActivity : ComponentActivity() {
                 onRetry = viewModel::retryListening,
                 onMessageDismiss = viewModel::clearMessage
             )
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideStatusBar()
+    }
+
+    private fun hideStatusBar() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowInsetsControllerCompat(window, window.decorView).apply {
+            hide(WindowInsetsCompat.Type.statusBars())
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
     }
 
