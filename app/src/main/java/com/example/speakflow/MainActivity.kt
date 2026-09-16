@@ -2,6 +2,7 @@ package com.example.speakflow
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -32,17 +33,22 @@ class MainActivity : ComponentActivity() {
             onPromptFinished = viewModel::onPromptFinished,
             onPartialResult = viewModel::onPartialRecognition,
             onResult = viewModel::onRecognition,
-            onUnavailable = viewModel::onRecognitionUnavailable
+            onUnavailable = viewModel::onRecognitionUnavailable,
+            onInputDeviceChanged = viewModel::onMicrophoneChanged
         )
         setContent {
             val state by viewModel.state.collectAsStateWithLifecycle()
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             var datasetsOpen by rememberSaveable { mutableStateOf(false) }
+            var bluetoothPermissionRequested by rememberSaveable { mutableStateOf(false) }
             val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let(viewModel::importDataset)
             }
-            val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-                if (granted) viewModel.restart() else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
+            val audioPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+                val microphoneGranted = grants[Manifest.permission.RECORD_AUDIO]
+                    ?: (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED)
+                if (microphoneGranted) viewModel.retryListening()
+                else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
             }
 
             LaunchedEffect(state.phase, state.position) {
@@ -52,9 +58,23 @@ class MainActivity : ComponentActivity() {
                         speech.speak(if (korean) it.korean else it.english, korean)
                     }
                     LessonPhase.LISTENING -> {
-                        if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                        val requiredPermissions = buildList {
+                            if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                add(Manifest.permission.RECORD_AUDIO)
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED &&
+                                !bluetoothPermissionRequested
+                            ) {
+                                add(Manifest.permission.BLUETOOTH_CONNECT)
+                            }
+                        }
+                        if (requiredPermissions.isEmpty()) {
                             speech.listen(state.current?.english.orEmpty())
-                        } else micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        } else {
+                            if (Manifest.permission.BLUETOOTH_CONNECT in requiredPermissions) bluetoothPermissionRequested = true
+                            audioPermissions.launch(requiredPermissions.toTypedArray())
+                        }
                     }
                     LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE, LessonPhase.TIMED_OUT -> speech.stop()
                     else -> Unit

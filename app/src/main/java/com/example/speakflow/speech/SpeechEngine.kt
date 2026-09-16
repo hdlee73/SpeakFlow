@@ -1,7 +1,11 @@
 package com.example.speakflow.speech
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.os.Bundle
 import android.os.Build
 import android.os.Handler
@@ -12,6 +16,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import androidx.core.content.ContextCompat
 import java.util.Locale
 
 class SpeechEngine(
@@ -19,10 +24,15 @@ class SpeechEngine(
     private val onPromptFinished: () -> Unit,
     private val onPartialResult: (List<String>) -> Unit,
     private val onResult: (List<String>) -> Unit,
-    private val onUnavailable: (String) -> Unit
+    private val onUnavailable: (String) -> Unit,
+    private val onInputDeviceChanged: (String) -> Unit
 ) {
+    private val appContext = context.applicationContext
+    private val audioManager = appContext.getSystemService(AudioManager::class.java)
     private var ttsReady = false
     private var acceptingRecognitionResults = false
+    private var bluetoothRouteActive = false
+    private var pendingListen: Runnable? = null
     private var pendingPrompt: Pair<String, Boolean>? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var tts: TextToSpeech
@@ -59,12 +69,14 @@ class SpeechEngine(
             override fun onResults(results: Bundle) {
                 if (!acceptingRecognitionResults) return
                 acceptingRecognitionResults = false
+                restoreAudioRoute()
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 onResult(matches.orEmpty())
             }
             override fun onError(error: Int) {
                 if (!acceptingRecognitionResults) return
                 acceptingRecognitionResults = false
+                restoreAudioRoute()
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) onUnavailable("마이크 권한이 필요합니다.")
                 else onResult(emptyList())
             }
@@ -86,8 +98,10 @@ class SpeechEngine(
     }
 
     fun speak(text: String, korean: Boolean) {
+        cancelPendingListen()
         acceptingRecognitionResults = false
         recognizer?.cancel()
+        restoreAudioRoute()
         if (!ttsReady) {
             pendingPrompt = text to korean
             return
@@ -123,10 +137,77 @@ class SpeechEngine(
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf(expectedText))
             }
         }
-        acceptingRecognitionResults = true
-        recognizer.startListening(intent)
+        cancelPendingListen()
+        val routeDelay = selectInputDevice()
+        pendingListen = Runnable {
+            pendingListen = null
+            acceptingRecognitionResults = true
+            runCatching { recognizer.startListening(intent) }.onFailure {
+                acceptingRecognitionResults = false
+                restoreAudioRoute()
+                onUnavailable("마이크를 시작하지 못했습니다. 오디오 권한과 블루투스 연결을 확인해 주세요.")
+            }
+        }.also { mainHandler.postDelayed(it, routeDelay) }
     }
 
-    fun stop() { pendingPrompt = null; acceptingRecognitionResults = false; recognizer?.cancel(); tts.stop() }
-    fun destroy() { pendingPrompt = null; acceptingRecognitionResults = false; recognizer?.destroy(); tts.shutdown() }
+    private fun selectInputDevice(): Long {
+        onInputDeviceChanged("휴대전화 마이크")
+        if (audioManager == null) return 0L
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return 0L
+                val bluetooth = audioManager.availableCommunicationDevices.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                } ?: return 0L
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                if (audioManager.setCommunicationDevice(bluetooth)) {
+                    bluetoothRouteActive = true
+                    onInputDeviceChanged("${bluetooth.productName} 마이크")
+                    500L
+                } else {
+                    audioManager.mode = AudioManager.MODE_NORMAL
+                    0L
+                }
+            } else {
+                val bluetooth = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO } ?: return 0L
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                @Suppress("DEPRECATION")
+                audioManager.startBluetoothSco()
+                @Suppress("DEPRECATION")
+                audioManager.isBluetoothScoOn = true
+                bluetoothRouteActive = true
+                onInputDeviceChanged("${bluetooth.productName} 마이크")
+                700L
+            }
+        }.getOrElse {
+            bluetoothRouteActive = false
+            audioManager.mode = AudioManager.MODE_NORMAL
+            0L
+        }
+    }
+
+    private fun restoreAudioRoute() {
+        if (audioManager == null || !bluetoothRouteActive) return
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audioManager.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.stopBluetoothSco()
+                @Suppress("DEPRECATION")
+                run { audioManager.isBluetoothScoOn = false }
+            }
+            audioManager.mode = AudioManager.MODE_NORMAL
+        }
+        bluetoothRouteActive = false
+    }
+
+    private fun cancelPendingListen() {
+        pendingListen?.let(mainHandler::removeCallbacks)
+        pendingListen = null
+    }
+
+    fun stop() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognizer?.cancel(); restoreAudioRoute(); tts.stop() }
+    fun destroy() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognizer?.destroy(); restoreAudioRoute(); tts.shutdown() }
 }

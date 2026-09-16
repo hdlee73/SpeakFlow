@@ -43,6 +43,7 @@ data class LearningUiState(
     val heardText: String = "",
     val liveText: String = "",
     val score: Int? = null,
+    val microphoneLabel: String = "휴대전화 마이크",
     val remainingSeconds: Int = 0,
     val message: String? = null
 ) {

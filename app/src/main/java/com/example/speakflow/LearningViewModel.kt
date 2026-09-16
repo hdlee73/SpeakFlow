@@ -195,6 +195,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
     }
 
+    fun onMicrophoneChanged(label: String) = _state.update { it.copy(microphoneLabel = label) }
+
     fun togglePause() {
         when (_state.value.phase) {
             LessonPhase.PAUSED -> startSpeaking()

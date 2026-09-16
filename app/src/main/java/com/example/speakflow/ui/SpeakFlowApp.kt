@@ -138,6 +138,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             LessonStatusHeader(state, statusColor)
+            Text(state.microphoneLabel, color = Color(0xFF667085), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(12.dp))
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
