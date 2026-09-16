@@ -130,12 +130,24 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 800L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_200L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 800L)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 8)
+            val expectedWords = expectedText.trim().split(Regex("\\s+")).filter(String::isNotBlank)
+            val minimumLength = (expectedWords.size * 250L).coerceIn(1_200L, 5_000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minimumLength)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_800L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_100L)
             if (Build.VERSION.SDK_INT >= 33) {
-                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, arrayListOf(expectedText))
+                val normalizedWords = expectedWords.map { it.trim('.', ',', '!', '?', ';', ':', '"', '\'', '’') }
+                    .filter { it.length >= 3 }
+                val phrases = buildList {
+                    add(expectedText)
+                    addAll(normalizedWords)
+                    addAll(normalizedWords.zipWithNext { first, second -> "$first $second" })
+                }.distinct().take(24)
+                putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(phrases))
+                putExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true)
+                putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY)
+                putExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true)
             }
         }
         cancelPendingListen()

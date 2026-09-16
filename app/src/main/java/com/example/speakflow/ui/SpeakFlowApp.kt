@@ -171,6 +171,16 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                             fontSize = 14.sp
                         )
                     }
+                    if (state.heardText.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "인식: ${state.heardText}",
+                            color = Color(0xFF667085),
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
                 if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
                     Spacer(Modifier.height(10.dp))

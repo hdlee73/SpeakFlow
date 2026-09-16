@@ -138,7 +138,11 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         if (_state.value.phase != LessonPhase.LISTENING) return
         val expected = _state.value.current?.english ?: return
         val remaining = ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt().coerceAtLeast(0)
-        val best = candidates.filter(String::isNotBlank)
+        val recognized = candidates.filter(String::isNotBlank)
+        val stitched = _state.value.heardText.takeIf(String::isNotBlank)?.let { previous ->
+            recognized.map { "$previous $it" }
+        }.orEmpty()
+        val best = (recognized + stitched).distinct()
             .map { it to SpeechScorer.score(expected, it) }
             .maxByOrNull { it.second }
         val text = best?.first.orEmpty()
@@ -159,9 +163,27 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             // deadline and reopen the microphone instead of ending the whole attempt.
             if (remaining <= 0) {
                 timerJob?.cancel()
-                _state.update { it.copy(phase = LessonPhase.TIMED_OUT, heardText = text, liveText = text, score = score, remainingSeconds = 0) }
+                _state.update {
+                    val keepPrevious = (it.score ?: -1) > score
+                    it.copy(
+                        phase = LessonPhase.TIMED_OUT,
+                        heardText = if (keepPrevious) it.heardText else text,
+                        liveText = if (keepPrevious) it.liveText else text,
+                        score = maxOf(it.score ?: 0, score),
+                        remainingSeconds = 0
+                    )
+                }
             } else {
-                _state.update { it.copy(phase = LessonPhase.RETRYING, heardText = text, liveText = text, score = score, remainingSeconds = remaining) }
+                _state.update {
+                    val keepPrevious = (it.score ?: -1) > score
+                    it.copy(
+                        phase = LessonPhase.RETRYING,
+                        heardText = if (keepPrevious) it.heardText else text,
+                        liveText = if (keepPrevious) it.liveText else text,
+                        score = maxOf(it.score ?: 0, score),
+                        remainingSeconds = remaining
+                    )
+                }
                 advanceJob?.cancel()
                 advanceJob = viewModelScope.launch {
                     delay(300)
