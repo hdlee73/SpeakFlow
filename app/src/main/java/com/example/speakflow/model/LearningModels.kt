@@ -43,6 +43,7 @@ data class LearningUiState(
     val heardText: String = "",
     val liveText: String = "",
     val retryText: String? = null,
+    val matchedWords: List<Boolean> = emptyList(),
     val score: Int? = null,
     val allWordsMatched: Boolean = false,
     val feedbackSequence: Long = 0L,

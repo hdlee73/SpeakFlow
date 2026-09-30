@@ -152,13 +152,8 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
                 } else {
-                    val displayEnglish = state.retryText ?: item.english
-                    if (!state.retryText.isNullOrBlank() && state.phase != LessonPhase.CORRECT) {
-                        Text("다시 발음할 부분", color = Color(0xFFB45309), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(6.dp))
-                    }
-                    val (fontSize, lineHeight) = adaptiveTextSize(displayEnglish.length, expanded)
-                    RealtimeSentence(displayEnglish, state.liveText, fontSize, lineHeight)
+                    val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
+                    RealtimeSentence(item.english, state.liveText, state.matchedWords, fontSize, lineHeight)
                     val showTranslation = item.korean.isNotBlank() && state.phase in setOf(
                         LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
                     )
@@ -209,21 +204,38 @@ private fun LessonStatusHeader(state: LearningUiState, statusColor: Color) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Surface(
-            modifier = Modifier.width(160.dp).fillMaxHeight(),
+            modifier = Modifier.fillMaxWidth(.82f).fillMaxHeight(),
             color = statusColor,
             shape = RoundedCornerShape(10.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Text(statusLabel(state), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                Text(
+                    statusLabel(state),
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    lineHeight = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2
+                )
             }
         }
     }
 }
 
 @Composable
-private fun RealtimeSentence(expected: String, liveText: String, fontSize: androidx.compose.ui.unit.TextUnit, lineHeight: androidx.compose.ui.unit.TextUnit) {
+private fun RealtimeSentence(
+    expected: String,
+    liveText: String,
+    confirmedMatches: List<Boolean>,
+    fontSize: androidx.compose.ui.unit.TextUnit,
+    lineHeight: androidx.compose.ui.unit.TextUnit
+) {
     val words = SpeechScorer.displayWords(expected)
-    val matched = SpeechScorer.matchedWords(expected, liveText)
+    val liveMatches = SpeechScorer.matchedWords(expected, liveText)
+    val matched = words.indices.map { index ->
+        confirmedMatches.getOrElse(index) { false } || liveMatches.getOrElse(index) { false }
+    }
     val styled = buildAnnotatedString {
         words.forEachIndexed { index, word ->
             if (index > 0) append(" ")

@@ -85,7 +85,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                     it.copy(
                         items = emptyList(), order = emptyList(), position = 0,
                         phase = LessonPhase.IDLE, datasetName = null, activeDatasetId = null,
-                        savedDatasets = emptyList(), heardText = "", liveText = "", retryText = null, score = null,
+                        savedDatasets = emptyList(), heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null,
                         allWordsMatched = false,
                         remainingSeconds = 0, message = "데이터셋을 삭제했습니다."
                     )
@@ -101,7 +101,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         val order = buildOrder(items.size, _state.value.settings.order)
         _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id,
-            heardText = "", liveText = "", retryText = null, score = null, allWordsMatched = false, remainingSeconds = 0, message = null) }
+            heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0, message = null) }
     }
 
     fun updateSettings(settings: LearningSettings) {
@@ -117,7 +117,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         _state.update {
             it.copy(settings = settings, order = buildOrder(it.items.size, settings.order), position = 0,
-                phase = LessonPhase.IDLE, heardText = "", liveText = "", retryText = null, score = null, allWordsMatched = false, remainingSeconds = 0)
+                phase = LessonPhase.IDLE, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0)
         }
     }
 
@@ -125,7 +125,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         if (_state.value.current == null) return
         timerJob?.cancel()
         advanceJob?.cancel()
-        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
+        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
     }
 
     fun onPromptFinished() {
@@ -150,7 +150,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         // cancel() can deliver a late recognizer callback while TTS is already playing.
         // It belongs to the previous session and must not turn the new countdown into 0.
         if (_state.value.phase != LessonPhase.LISTENING) return
-        val expected = _state.value.retryText ?: _state.value.current?.english ?: return
+        val expected = _state.value.current?.english ?: return
         val remaining = if (deadline == 0L) _state.value.settings.timeoutSeconds
             else ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt().coerceAtLeast(0)
         val recognized = candidates.filter(String::isNotBlank)
@@ -163,9 +163,12 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .maxByOrNull { it.second }
         val text = best?.first.orEmpty()
         val score = best?.second ?: 0
-        val matchedWords = SpeechScorer.matchedWords(expected, text)
-        val allWordsMatched = text.isNotBlank() && matchedWords.all { it }
-        val matchedCoverage = if (matchedWords.isEmpty()) 0 else matchedWords.count { it } * 100 / matchedWords.size
+        val currentMatches = SpeechScorer.matchedWords(expected, text)
+        val matchedWords = currentMatches.indices.map { index ->
+            _state.value.matchedWords.getOrElse(index) { false } || currentMatches[index]
+        }
+        val allWordsMatched = matchedWords.isNotEmpty() && matchedWords.all { it }
+        val matchedCoverage = if (currentMatches.isEmpty()) 0 else currentMatches.count { it } * 100 / currentMatches.size
         if (allWordsMatched) {
             timerJob?.cancel()
             _state.update { state -> state.copy(
@@ -173,6 +176,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 heardText = text,
                 liveText = state.current?.english.orEmpty(),
                 retryText = null,
+                matchedWords = matchedWords,
                 score = score,
                 allWordsMatched = true,
                 feedbackSuccess = true,
@@ -186,6 +190,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 phase = LessonPhase.LISTENING,
                 heardText = text,
                 liveText = text,
+                matchedWords = matchedWords,
                 score = score,
                 allWordsMatched = false,
                 remainingSeconds = remaining,
@@ -193,12 +198,16 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             ) }
         } else {
             timerJob?.cancel()
-            val retryText = SpeechScorer.unmatchedText(expected, text).ifBlank { expected }
+            val retryText = SpeechScorer.displayWords(expected)
+                .filterIndexed { index, _ -> !matchedWords.getOrElse(index) { false } }
+                .joinToString(" ")
+                .ifBlank { expected }
             _state.update { it.copy(
                 phase = LessonPhase.RETRYING,
                 heardText = text,
                 liveText = text,
                 retryText = retryText,
+                matchedWords = matchedWords,
                 score = score,
                 allWordsMatched = false,
                 feedbackSuccess = false,
@@ -223,16 +232,21 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         timerJob?.cancel()
         deadline = 0L
-        _state.update { it.copy(
-            phase = LessonPhase.LISTENING,
-            heardText = "",
-            liveText = "",
-            score = null,
-            allWordsMatched = false,
-            feedbackSuccess = null,
-            remainingSeconds = it.settings.timeoutSeconds,
-            listenRequestId = it.listenRequestId + 1
-        ) }
+        _state.update {
+            val preservePartialMatches = !it.retryText.isNullOrBlank() && !it.allWordsMatched
+            it.copy(
+                phase = LessonPhase.LISTENING,
+                heardText = "",
+                liveText = "",
+                retryText = if (preservePartialMatches) it.retryText else null,
+                matchedWords = if (preservePartialMatches) it.matchedWords else emptyList(),
+                score = null,
+                allWordsMatched = false,
+                feedbackSuccess = null,
+                remainingSeconds = it.settings.timeoutSeconds,
+                listenRequestId = it.listenRequestId + 1
+            )
+        }
     }
 
     fun onFeedbackFinished(sequence: Long, success: Boolean) {
@@ -287,7 +301,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     fun previous() {
         timerJob?.cancel()
         advanceJob?.cancel()
-        _state.update { it.copy(position = (it.position - 1).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", retryText = null, score = null, allWordsMatched = false, feedbackSuccess = null) }
+        _state.update { it.copy(position = (it.position - 1).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null) }
     }
 
     fun next() {
@@ -295,7 +309,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         _state.update {
             if (it.position >= it.order.lastIndex) it.copy(phase = LessonPhase.COMPLETE, remainingSeconds = 0)
-            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
+            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
 
@@ -307,7 +321,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             val nextPosition = ((state.position + 1)..state.order.lastIndex)
                 .firstOrNull { state.order.getOrNull(it) != currentItemIndex }
             if (nextPosition == null) state.copy(phase = LessonPhase.COMPLETE, feedbackSuccess = null, remainingSeconds = 0)
-            else state.copy(position = nextPosition, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, score = null,
+            else state.copy(position = nextPosition, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null,
                 allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
@@ -318,7 +332,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         _state.update {
             if (it.items.isEmpty()) it.copy(message = "먼저 엑셀 데이터셋을 불러오세요.")
             else it.copy(order = buildOrder(it.items.size, it.settings.order), position = 0, phase = LessonPhase.SPEAKING,
-                heardText = "", liveText = "", retryText = null, score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
+                heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
 
@@ -336,11 +350,19 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             _state.update {
                 if (it.phase != LessonPhase.LISTENING) it else {
                     val recognized = it.liveText
-                    val expected = it.retryText ?: it.current?.english.orEmpty()
+                    val expected = it.current?.english.orEmpty()
+                    val currentMatches = SpeechScorer.matchedWords(expected, recognized)
+                    val matchedWords = currentMatches.indices.map { index ->
+                        it.matchedWords.getOrElse(index) { false } || currentMatches[index]
+                    }
                     it.copy(
                         phase = LessonPhase.RETRYING,
                         heardText = recognized,
-                        retryText = SpeechScorer.unmatchedText(expected, recognized).ifBlank { expected },
+                        retryText = SpeechScorer.displayWords(expected)
+                            .filterIndexed { index, _ -> !matchedWords.getOrElse(index) { false } }
+                            .joinToString(" ")
+                            .ifBlank { expected },
+                        matchedWords = matchedWords,
                         score = SpeechScorer.score(expected, recognized),
                         allWordsMatched = false,
                         feedbackSuccess = false,
