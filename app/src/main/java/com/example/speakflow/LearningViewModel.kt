@@ -21,7 +21,7 @@ import java.io.File
 
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
-        const val INCORRECT_RESULT_DISPLAY_MILLIS = 1_500L
+        const val INCORRECT_RESULT_DISPLAY_MILLIS = 500L
         const val SUCCESS_RESULT_DISPLAY_MILLIS = 3_000L
     }
     private val prefs = application.getSharedPreferences("learning", 0)
@@ -163,7 +163,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .maxByOrNull { it.second }
         val text = best?.first.orEmpty()
         val score = best?.second ?: 0
-        val allWordsMatched = text.isNotBlank() && SpeechScorer.matchedWords(expected, text).all { it }
+        val matchedWords = SpeechScorer.matchedWords(expected, text)
+        val allWordsMatched = text.isNotBlank() && matchedWords.all { it }
+        val matchedCoverage = if (matchedWords.isEmpty()) 0 else matchedWords.count { it } * 100 / matchedWords.size
         if (allWordsMatched) {
             timerJob?.cancel()
             _state.update { state -> state.copy(
@@ -176,7 +178,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 feedbackSuccess = true,
                 feedbackSequence = it.feedbackSequence + 1
             ) }
-        } else if (remaining > 0) {
+        } else if (remaining > 0 && matchedCoverage < 60) {
             // Android may finalize a fragment after a short pause even though the
             // user still has time. Preserve the attempt deadline and reopen the mic,
             // joining the next fragment to what has already been recognized.
@@ -246,10 +248,25 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             advanceJob = viewModelScope.launch {
                 delay(INCORRECT_RESULT_DISPLAY_MILLIS)
                 if (_state.value.phase == LessonPhase.RETRYING && _state.value.feedbackSequence == sequence) {
-                    retryListening()
+                    retryIncorrectPart()
                 }
             }
         }
+    }
+
+    private fun retryIncorrectPart() {
+        val remaining = ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt()
+        if (remaining <= 0 || _state.value.retryText.isNullOrBlank()) return
+        _state.update { it.copy(
+            phase = LessonPhase.LISTENING,
+            heardText = "",
+            liveText = "",
+            score = null,
+            allWordsMatched = false,
+            feedbackSuccess = null,
+            remainingSeconds = remaining,
+            listenRequestId = it.listenRequestId + 1
+        ) }
     }
 
     fun onRecognitionUnavailable(message: String) {
