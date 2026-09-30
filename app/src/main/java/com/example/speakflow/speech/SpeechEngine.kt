@@ -258,13 +258,18 @@ class SpeechEngine(
 
     fun playResultSound(success: Boolean, onFinished: () -> Unit) {
         runCatching {
-            val generator = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80)
-            val tone = if (success) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK
-            generator.startTone(tone, 260)
+            // Use the media stream because notification volume is often muted on
+            // phones used with Bluetooth earbuds. DTMF tones are widely supported.
+            val generator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
+            val tone = if (success) ToneGenerator.TONE_DTMF_9 else ToneGenerator.TONE_DTMF_2
+            val duration = if (success) 220 else 340
+            if (!generator.startTone(tone, duration)) {
+                generator.startTone(ToneGenerator.TONE_PROP_BEEP, duration)
+            }
             mainHandler.postDelayed({
                 generator.release()
                 onFinished()
-            }, 360L)
+            }, if (success) 320L else 440L)
         }.onFailure { mainHandler.post(onFinished) }
     }
 

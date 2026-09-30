@@ -151,12 +151,13 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 if (!revealEnglish) {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(8.dp))
-                    Text(maskedEnglishHint(item.english), fontSize = 14.sp, lineHeight = 20.sp, color = Color(0xFF8A94A6), textAlign = TextAlign.Center)
                 } else {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
                     RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
-                    if (item.korean.isNotBlank()) {
+                    val showTranslation = item.korean.isNotBlank() && state.phase in setOf(
+                        LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
+                    )
+                    if (showTranslation) {
                         Spacer(Modifier.height(8.dp))
                         Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
                     }
@@ -227,14 +228,6 @@ private fun RealtimeSentence(expected: String, liveText: String, fontSize: andro
         }
     }
     Text(styled, fontSize = fontSize, lineHeight = lineHeight, textAlign = TextAlign.Center)
-}
-
-private fun maskedEnglishHint(english: String): String {
-    val words = SpeechScorer.displayWords(english)
-    return words.mapIndexed { index, word ->
-        val hide = if (words.size <= 2) index == words.lastIndex else index % 3 == 1
-        if (hide) word.map { char -> if (char.isLetterOrDigit()) '_' else char }.joinToString("") else word
-    }.joinToString(" ")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -139,7 +139,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
 
     fun onRecognizerReady() {
         if (_state.value.phase != LessonPhase.LISTENING) return
-        deadline = System.currentTimeMillis() + _state.value.settings.timeoutSeconds * 1_000L
+        if (deadline == 0L) {
+            deadline = System.currentTimeMillis() + _state.value.settings.timeoutSeconds * 1_000L
+        }
         startTimer()
     }
 
@@ -151,10 +153,11 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val remaining = if (deadline == 0L) _state.value.settings.timeoutSeconds
             else ((deadline - System.currentTimeMillis() + 999) / 1_000).toInt().coerceAtLeast(0)
         val recognized = candidates.filter(String::isNotBlank)
-        val stitched = _state.value.heardText.takeIf(String::isNotBlank)?.let { previous ->
+        val previous = _state.value.heardText
+        val stitched = previous.takeIf(String::isNotBlank)?.let {
             recognized.map { "$previous $it" }
         }.orEmpty()
-        val best = (recognized + stitched).distinct()
+        val best = (recognized + stitched + listOf(previous).filter(String::isNotBlank)).distinct()
             .map { it to SpeechScorer.score(expected, it) }
             .maxByOrNull { it.second }
         val text = best?.first.orEmpty()
@@ -170,6 +173,19 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 allWordsMatched = true,
                 feedbackSuccess = true,
                 feedbackSequence = it.feedbackSequence + 1
+            ) }
+        } else if (remaining > 0) {
+            // Android may finalize a fragment after a short pause even though the
+            // user still has time. Preserve the attempt deadline and reopen the mic,
+            // joining the next fragment to what has already been recognized.
+            _state.update { it.copy(
+                phase = LessonPhase.LISTENING,
+                heardText = text,
+                liveText = text,
+                score = score,
+                allWordsMatched = false,
+                remainingSeconds = remaining,
+                listenRequestId = it.listenRequestId + 1
             ) }
         } else {
             timerJob?.cancel()
@@ -191,8 +207,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         // The first hypothesis is the recognizer's current best result. Avoid scoring
         // every alternative on each partial callback so the UI can repaint immediately.
         val latest = candidates.firstOrNull(String::isNotBlank).orEmpty()
-        if (latest.isNotBlank() && latest != _state.value.liveText) {
-            _state.update { it.copy(liveText = latest) }
+        if (latest.isNotBlank()) {
+            val combined = listOf(_state.value.heardText, latest).filter(String::isNotBlank).joinToString(" ")
+            if (combined != _state.value.liveText) _state.update { it.copy(liveText = combined) }
         }
     }
 
