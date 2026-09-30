@@ -168,7 +168,6 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             _state.value.matchedWords.getOrElse(index) { false } || currentMatches[index]
         }
         val allWordsMatched = matchedWords.isNotEmpty() && matchedWords.all { it }
-        val matchedCoverage = if (currentMatches.isEmpty()) 0 else currentMatches.count { it } * 100 / currentMatches.size
         if (allWordsMatched) {
             timerJob?.cancel()
             _state.update { state -> state.copy(
@@ -182,10 +181,10 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 feedbackSuccess = true,
                 feedbackSequence = state.feedbackSequence + 1
             ) }
-        } else if (remaining > 0 && matchedCoverage < 60) {
-            // Android may finalize a fragment after a short pause even though the
-            // user still has time. Preserve the attempt deadline and reopen the mic,
-            // joining the next fragment to what has already been recognized.
+        } else if (remaining > 0) {
+            // A finalized recognizer result is only a fragment of the attempt while
+            // time remains. Keep every word matched so far and continue listening.
+            // Incorrect feedback is emitted only by the timer after the deadline.
             _state.update { it.copy(
                 phase = LessonPhase.LISTENING,
                 heardText = text,
@@ -196,8 +195,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 remainingSeconds = remaining,
                 listenRequestId = it.listenRequestId + 1
             ) }
-        } else {
-            timerJob?.cancel()
+        } else if (_state.value.phase == LessonPhase.LISTENING) {
             val retryText = SpeechScorer.displayWords(expected)
                 .filterIndexed { index, _ -> !matchedWords.getOrElse(index) { false } }
                 .joinToString(" ")
