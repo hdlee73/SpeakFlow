@@ -6,7 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
-import android.media.ToneGenerator
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.os.Build
 import android.os.Handler
@@ -18,6 +18,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
+import com.example.speakflow.R
 import java.util.Locale
 
 class SpeechEngine(
@@ -258,18 +259,24 @@ class SpeechEngine(
 
     fun playResultSound(success: Boolean, onFinished: () -> Unit) {
         runCatching {
-            // Use the media stream because notification volume is often muted on
-            // phones used with Bluetooth earbuds. DTMF tones are widely supported.
-            val generator = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
-            val tone = if (success) ToneGenerator.TONE_DTMF_9 else ToneGenerator.TONE_DTMF_2
-            val duration = if (success) 220 else 340
-            if (!generator.startTone(tone, duration)) {
-                generator.startTone(ToneGenerator.TONE_PROP_BEEP, duration)
-            }
-            mainHandler.postDelayed({
-                generator.release()
+            val sound = if (success) R.raw.result_success else R.raw.result_incorrect
+            val attributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            val player = MediaPlayer.create(appContext, sound, attributes, 0)
+                ?: error("결과음을 준비하지 못했습니다.")
+            var finished = false
+            fun finish() {
+                if (finished) return
+                finished = true
+                player.release()
                 onFinished()
-            }, if (success) 320L else 440L)
+            }
+            player.setVolume(1f, 1f)
+            player.setOnCompletionListener { finish() }
+            player.setOnErrorListener { _, _, _ -> finish(); true }
+            player.start()
         }.onFailure { mainHandler.post(onFinished) }
     }
 
