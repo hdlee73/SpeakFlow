@@ -36,6 +36,7 @@ class SpeechEngine(
     private var acceptingRecognitionResults = false
     private var recognitionStarting = false
     private var bluetoothRouteActive = false
+    private val streamsMutedForRecognition = mutableSetOf<Int>()
     private var pendingListen: Runnable? = null
     private var pendingReadyTimeout: Runnable? = null
     private var pendingPrompt: Pair<String, Boolean>? = null
@@ -118,6 +119,7 @@ class SpeechEngine(
         cancelPendingListen()
         acceptingRecognitionResults = false
         recognizer?.cancel()
+        restoreRecognitionAudio()
         restoreAudioRoute()
         if (!ttsReady) {
             pendingPrompt = text to korean
@@ -168,6 +170,7 @@ class SpeechEngine(
             }
         }
         cancelPendingListen()
+        silenceRecognitionAudio()
         acceptingRecognitionResults = false
         recognitionStarting = false
         speechRecognizer.cancel()
@@ -257,7 +260,33 @@ class SpeechEngine(
         pendingReadyTimeout = null
     }
 
+    private fun silenceRecognitionAudio() {
+        if (audioManager == null) return
+        listOf(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.STREAM_SYSTEM,
+            AudioManager.STREAM_NOTIFICATION,
+            AudioManager.STREAM_VOICE_CALL
+        ).forEach { stream ->
+            if (stream !in streamsMutedForRecognition && !audioManager.isStreamMute(stream)) {
+                runCatching {
+                    audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
+                    streamsMutedForRecognition += stream
+                }
+            }
+        }
+    }
+
+    private fun restoreRecognitionAudio() {
+        if (audioManager == null) return
+        streamsMutedForRecognition.toList().forEach { stream ->
+            runCatching { audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, 0) }
+        }
+        streamsMutedForRecognition.clear()
+    }
+
     fun playSuccessSound(onFinished: () -> Unit) {
+        restoreRecognitionAudio()
         runCatching {
             val attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -279,6 +308,6 @@ class SpeechEngine(
         }.onFailure { mainHandler.post(onFinished) }
     }
 
-    fun stop() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreAudioRoute(); tts.stop() }
-    fun destroy() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreAudioRoute(); tts.shutdown() }
+    fun stop() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
+    fun destroy() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
 }
