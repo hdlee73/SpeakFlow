@@ -22,6 +22,7 @@ import java.util.Locale
 class SpeechEngine(
     context: Context,
     private val onPromptFinished: () -> Unit,
+    private val onRecognizerReady: () -> Unit,
     private val onPartialResult: (List<String>) -> Unit,
     private val onResult: (List<String>) -> Unit,
     private val onUnavailable: (String) -> Unit,
@@ -60,7 +61,12 @@ class SpeechEngine(
         }
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) { mainHandler.post(onPromptFinished) }
+            override fun onDone(utteranceId: String?) {
+                // Bluetooth media playback can finish at the TTS engine slightly before
+                // the headset has rendered its final audio frames. Leave a short tail
+                // before switching the same device into communication/microphone mode.
+                mainHandler.postDelayed(onPromptFinished, 300L)
+            }
             @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) {
                 mainHandler.post { onUnavailable("예문 음성을 재생하지 못했습니다. 휴대전화의 미디어 음량과 TTS 설정을 확인해 주세요.") }
             }
@@ -69,18 +75,16 @@ class SpeechEngine(
             override fun onResults(results: Bundle) {
                 if (!acceptingRecognitionResults) return
                 acceptingRecognitionResults = false
-                restoreAudioRoute()
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 onResult(matches.orEmpty())
             }
             override fun onError(error: Int) {
                 if (!acceptingRecognitionResults) return
                 acceptingRecognitionResults = false
-                restoreAudioRoute()
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) onUnavailable("마이크 권한이 필요합니다.")
                 else onResult(emptyList())
             }
-            override fun onReadyForSpeech(params: Bundle?) = Unit
+            override fun onReadyForSpeech(params: Bundle?) = onRecognizerReady()
             override fun onBeginningOfSpeech() = Unit
             override fun onRmsChanged(rmsdB: Float) = Unit
             override fun onBufferReceived(buffer: ByteArray?) = Unit
@@ -132,10 +136,10 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 8)
             val expectedWords = expectedText.trim().split(Regex("\\s+")).filter(String::isNotBlank)
-            val minimumLength = (expectedWords.size * 250L).coerceIn(1_200L, 5_000L)
+            val minimumLength = (expectedWords.size * 300L).coerceIn(1_500L, 7_000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minimumLength)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1_800L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_100L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2_600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_600L)
             if (Build.VERSION.SDK_INT >= 33) {
                 val normalizedWords = expectedWords.map { it.trim('.', ',', '!', '?', ';', ':', '"', '\'', '’') }
                     .filter { it.length >= 3 }
@@ -164,6 +168,7 @@ class SpeechEngine(
     }
 
     private fun selectInputDevice(): Long {
+        if (bluetoothRouteActive) return 0L
         onInputDeviceChanged("휴대전화 마이크")
         if (audioManager == null) return 0L
         return runCatching {
@@ -176,7 +181,7 @@ class SpeechEngine(
                 if (audioManager.setCommunicationDevice(bluetooth)) {
                     bluetoothRouteActive = true
                     onInputDeviceChanged("${bluetooth.productName} 마이크")
-                    500L
+                    800L
                 } else {
                     audioManager.mode = AudioManager.MODE_NORMAL
                     0L
@@ -191,7 +196,7 @@ class SpeechEngine(
                 audioManager.isBluetoothScoOn = true
                 bluetoothRouteActive = true
                 onInputDeviceChanged("${bluetooth.productName} 마이크")
-                700L
+                    1_000L
             }
         }.getOrElse {
             bluetoothRouteActive = false

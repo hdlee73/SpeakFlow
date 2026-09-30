@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
         speech = SpeechEngine(
             context = this,
             onPromptFinished = viewModel::onPromptFinished,
+            onRecognizerReady = viewModel::onRecognizerReady,
             onPartialResult = viewModel::onPartialRecognition,
             onResult = viewModel::onRecognition,
             onUnavailable = viewModel::onRecognitionUnavailable,
@@ -54,7 +55,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(state.phase, state.position) {
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
-                        val korean = state.settings.mode == LearningMode.TRANSLATION
+                        val korean = state.settings.mode == LearningMode.TRANSLATION && it.korean.isNotBlank()
                         speech.speak(if (korean) it.korean else it.english, korean)
                     }
                     LessonPhase.LISTENING -> {

@@ -112,7 +112,7 @@ private fun EmptyState(onImport: () -> Unit) {
             Spacer(Modifier.height(16.dp))
             Text("나만의 문장으로 말하기 연습", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
             Spacer(Modifier.height(10.dp))
-            Text("첫 두 열에 한국어와 영어가 있는 Excel(.xlsx) 또는 CSV 파일을 불러오세요. 열 순서는 자동으로 인식합니다.", color = Color(0xFF667085), textAlign = TextAlign.Center)
+            Text("한글·영어 두 열 또는 영어 한 열로 된 Excel(.xlsx)·CSV 파일을 불러오세요. 열 순서는 자동으로 인식합니다.", color = Color(0xFF667085), textAlign = TextAlign.Center)
             Spacer(Modifier.height(24.dp))
             Button(onClick = onImport, shape = RoundedCornerShape(14.dp)) { Text("데이터셋 불러오기") }
         }
@@ -145,7 +145,9 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                val revealEnglish = !translation || state.phase == LessonPhase.CORRECT || state.phase == LessonPhase.TIMED_OUT
+                val revealEnglish = !translation || item.korean.isBlank() || state.phase in setOf(
+                    LessonPhase.LISTENING, LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
+                )
                 if (!revealEnglish) {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
@@ -154,25 +156,14 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 } else {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
                     RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
-                    Spacer(Modifier.height(8.dp))
-                    Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
-                }
-                state.score?.let { score ->
-                    Spacer(Modifier.height(12.dp))
-                    Surface(
-                        color = if (score >= state.settings.passScore) Mint.copy(alpha = .16f) else Color(0xFFFFE8CC),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            "직전 발음 점수  ${score}점",
-                            Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                            color = if (score >= state.settings.passScore) Color(0xFF087F5B) else Color(0xFFB45309),
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 14.sp
-                        )
+                    if (item.korean.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
                     }
+                }
+                state.score?.let {
                     if (state.heardText.isNotBlank()) {
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(12.dp))
                         Text(
                             "인식: ${state.heardText}",
                             color = Color(0xFF667085),
@@ -224,17 +215,15 @@ private fun LessonStatusHeader(state: LearningUiState, statusColor: Color) {
                 Text(statusLabel(state), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             }
         }
-        Spacer(Modifier.width(8.dp))
-        Box(Modifier.width(94.dp).fillMaxHeight(), contentAlignment = Alignment.Center) {
-            if (state.settings.repeatCount > 1) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = Blue.copy(alpha = .10f),
-                    shape = RoundedCornerShape(10.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+        if (state.settings.repeatCount > 1) {
+            Spacer(Modifier.width(8.dp))
+            Surface(
+                modifier = Modifier.width(94.dp).fillMaxHeight(),
+                color = Blue.copy(alpha = .10f),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -326,6 +315,7 @@ private fun statusLabel(state: LearningUiState) = when (state.phase) {
     LessonPhase.SPEAKING -> "🔊 들어 보세요"
     LessonPhase.LISTENING -> "🎙 Speak now"
     LessonPhase.CORRECT -> when {
+        state.allWordsMatched -> "✓ 모두 인식 · 자동 이동"
         state.hasAnotherRepeat -> "✓ 통과 · 다음 반복"
         state.settings.autoAdvanceSentence -> "✓ 통과 · 자동 이동"
         else -> "✓ Nice"
@@ -420,7 +410,7 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                 Spacer(Modifier.height(18.dp))
                 Text("발음 제한 시간: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
                 Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
-                Text("통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
+                Text("음성 인식 통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
                 Slider(value = draft.passScore.toFloat(), onValueChange = { draft = draft.copy(passScore = it.toInt()) }, valueRange = 55f..95f, steps = 7)
                 Spacer(Modifier.height(12.dp))
             }

@@ -44,4 +44,16 @@ class DatasetParserTest {
         assertEquals("감사합니다", pairs[1].korean)
         assertEquals("Thank you", pairs[1].english)
     }
+
+    @Test fun readsSingleEnglishColumnAndSkipsHeader() {
+        val pairs = DatasetParser.rowsToPairs(listOf(
+            listOf("English"),
+            listOf("How are you?"),
+            listOf("Thank you")
+        ))
+        assertEquals(2, pairs.size)
+        assertEquals("", pairs[0].korean)
+        assertEquals("How are you?", pairs[0].english)
+        assertEquals("Thank you", pairs[1].english)
+    }
 }

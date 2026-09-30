@@ -12,8 +12,8 @@ android {
         applicationId = "com.example.speakflow"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10
-        versionName = "1.3.3"
+        versionCode = 11
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

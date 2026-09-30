@@ -39,27 +39,36 @@ object DatasetParser {
     }
 
     internal fun rowsToPairs(source: List<List<String>>): List<SentencePair> {
-        // Only the first two columns define a sentence pair. Detect which column is
-        // Korean so both Korean-English and English-Korean files work automatically.
+        // The first two columns may contain a Korean/English pair. A single English
+        // column is also valid; its translation is intentionally left blank.
         val rows = source.map { row -> row.take(2).map { it.trim().trim('\uFEFF') } }.filter { it.any(String::isNotBlank) }
-        require(rows.any { it.size >= 2 }) {
-            "첫 번째와 두 번째 열에 한국어와 영어 문장이 필요합니다."
-        }
+        require(rows.isNotEmpty()) { "학습할 영어 문장을 찾지 못했습니다." }
         val englishFirst = languageOrderScore(rows, englishFirst = true) > languageOrderScore(rows, englishFirst = false)
 
         return rows.mapNotNull { row ->
             val first = row.getOrElse(0) { "" }
             val second = row.getOrElse(1) { "" }
-            if (englishFirst) pairOrNull(second, first) else pairOrNull(first, second)
-        }.dropWhile { pair ->
-            val ko = pair.korean.lowercase()
-            val en = pair.english.lowercase()
-            (ko.contains("한국") || ko == "korean") && (en.contains("영어") || en == "english")
-        }.also { require(it.isNotEmpty()) { "학습할 문장을 찾지 못했습니다." } }
+            when {
+                first.isNotBlank() && second.isNotBlank() ->
+                    if (englishFirst) pairOrNull(second, first) else pairOrNull(first, second)
+                looksEnglish(first) -> SentencePair("", first)
+                looksEnglish(second) -> SentencePair("", second)
+                else -> null
+            }
+        }.dropWhile(::isHeader).also { require(it.isNotEmpty()) { "학습할 영어 문장을 찾지 못했습니다." } }
     }
 
     private fun pairOrNull(korean: String, english: String): SentencePair? =
         if (korean.isBlank() || english.isBlank()) null else SentencePair(korean, english)
+
+    private fun looksEnglish(value: String): Boolean = value.any { it in 'A'..'Z' || it in 'a'..'z' }
+
+    private fun isHeader(pair: SentencePair): Boolean {
+        val korean = pair.korean.lowercase()
+        val english = pair.english.lowercase().trim()
+        return ((korean.contains("한국") || korean == "korean") && (english.contains("영어") || english == "english")) ||
+            (pair.korean.isBlank() && english in setOf("english", "영어", "sentence", "sentences", "english sentence", "english sentences"))
+    }
 
     private fun languageOrderScore(rows: List<List<String>>, englishFirst: Boolean): Int = rows.sumOf { row ->
         val first = row.getOrElse(0) { "" }

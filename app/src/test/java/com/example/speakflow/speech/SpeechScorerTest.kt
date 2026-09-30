@@ -22,4 +22,19 @@ class SpeechScorerTest {
     @Test fun minorMissingWordsRemainUsable() {
         assertTrue(SpeechScorer.score("I know you want to help but you are still new", "I know you want help but you are still new") >= 68)
     }
+
+    @Test fun contractionHighlightUsesSameNormalizedAlignmentAsScore() {
+        val evaluation = SpeechScorer.evaluate(
+            "I'm on hand for the event on behalf of my boss.",
+            "I'm on hand from the event on behalf of my boss"
+        )
+        assertEquals(
+            listOf(true, true, true, false, true, true, true, true, true, true, true),
+            evaluation.matchedDisplayWords
+        )
+        assertEquals(evaluation.score, SpeechScorer.score(
+            "I'm on hand for the event on behalf of my boss.",
+            "I'm on hand from the event on behalf of my boss"
+        ))
+    }
 }
