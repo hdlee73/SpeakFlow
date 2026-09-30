@@ -146,7 +146,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 verticalArrangement = Arrangement.Center
             ) {
                 val revealEnglish = !translation || item.korean.isBlank() || state.phase in setOf(
-                    LessonPhase.LISTENING, LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
+                    LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
                 )
                 if (!revealEnglish) {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
@@ -173,7 +173,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                         )
                     }
                 }
-                if (state.phase == LessonPhase.LISTENING || state.phase == LessonPhase.RETRYING) {
+                if (state.phase == LessonPhase.LISTENING) {
                     Spacer(Modifier.height(10.dp))
                     Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
                 }
@@ -183,11 +183,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
                     Button(onClick = onNext, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) {
-                        Text(when {
-                            state.hasAnotherRepeat -> "다음 반복"
-                            state.position == state.order.lastIndex -> "학습 완료"
-                            else -> "다음 문장"
-                        })
+                        Text(if (state.position == state.order.lastIndex) "학습 완료" else "다음 문장")
                     }
                 }
                 else -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -213,18 +209,6 @@ private fun LessonStatusHeader(state: LearningUiState, statusColor: Color) {
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Text(statusLabel(state), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
-            }
-        }
-        if (state.settings.repeatCount > 1) {
-            Spacer(Modifier.width(8.dp))
-            Surface(
-                modifier = Modifier.width(94.dp).fillMaxHeight(),
-                color = Blue.copy(alpha = .10f),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("반복 ${state.repeatNumber}/${state.settings.repeatCount}", color = Blue, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
             }
         }
     }
@@ -315,12 +299,10 @@ private fun statusLabel(state: LearningUiState) = when (state.phase) {
     LessonPhase.SPEAKING -> "🔊 들어 보세요"
     LessonPhase.LISTENING -> "🎙 Speak now"
     LessonPhase.CORRECT -> when {
-        state.allWordsMatched -> "✓ 모두 인식 · 자동 이동"
-        state.hasAnotherRepeat -> "✓ 통과 · 다음 반복"
-        state.settings.autoAdvanceSentence -> "✓ 통과 · 자동 이동"
+        state.allWordsMatched -> "✓ 모두 인식"
         else -> "✓ Nice"
     }
-    LessonPhase.RETRYING -> "한 번 더 말해 보세요"
+    LessonPhase.RETRYING -> "일부 단어를 다시 말해 보세요"
     LessonPhase.TIMED_OUT -> "다음 문장으로 이동"
     LessonPhase.PAUSED -> "일시 정지"
     LessonPhase.COMPLETE -> "학습 완료"
@@ -354,12 +336,20 @@ private fun PlayerControls(state: LearningUiState, onPrevious: () -> Unit, onPla
 
 @Composable
 private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onClick: () -> Unit, enabled: Boolean, primary: Boolean = false) {
-    FilledIconButton(
-        onClick = onClick, enabled = enabled,
-        modifier = Modifier.size(buttonSize.dp).shadow(10.dp, CircleShape),
-        colors = IconButtonDefaults.filledIconButtonColors(containerColor = if (primary) Color.White else Color.White, contentColor = Blue, disabledContainerColor = Color.White.copy(alpha = .7f)),
-        shape = CircleShape
-    ) { Icon(painterResource(iconRes), description, Modifier.size(if (primary) 28.dp else 23.dp)) }
+    Surface(
+        modifier = Modifier.size(buttonSize.dp),
+        shape = CircleShape,
+        color = Color.White,
+        shadowElevation = 10.dp
+    ) {
+        IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                painterResource(iconRes), description,
+                Modifier.size(if (primary) 28.dp else 23.dp),
+                tint = if (enabled) Blue else Color(0xFFB9BDC6)
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -384,34 +374,17 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                     PlayOrder.entries.forEach { order -> FilterChip(selected = draft.order == order, onClick = { draft = draft.copy(order = order) }, label = { Text(order.label) }) }
                 }
                 Spacer(Modifier.height(18.dp))
-                Text("문장 반복 횟수", fontWeight = FontWeight.Bold)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    (1..5).forEach { count ->
-                        FilterChip(
-                            selected = draft.repeatCount == count,
-                            onClick = { draft = draft.copy(repeatCount = count) },
-                            label = { Text("${count}회") },
-                            modifier = Modifier.weight(1f)
-                        )
+                Text("음성 인식 후 동작", fontWeight = FontWeight.Bold)
+                Surface(color = Blue.copy(alpha = .08f), shape = RoundedCornerShape(14.dp)) {
+                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("✓ 모든 단어 일치: 알림음 후 다음 문장으로 자동 이동", fontSize = 13.sp)
+                        Text("• 일부 불일치: 다른 알림음 후 자동으로 다시 발음", fontSize = 13.sp)
+                        Text("일부가 다를 때 다음 문장 이동은 화면 버튼을 이용합니다.", color = Color.Gray, fontSize = 12.sp)
                     }
-                }
-                Spacer(Modifier.height(18.dp))
-                Text("통과 후 다음 문장", fontWeight = FontWeight.Bold)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(if (draft.autoAdvanceSentence) "자동으로 이동" else "버튼을 눌러 수동 이동")
-                        Text("반복 연습 중에는 통과하면 다음 반복으로 자동 이동합니다.", color = Color.Gray, fontSize = 12.sp)
-                    }
-                    Switch(
-                        checked = draft.autoAdvanceSentence,
-                        onCheckedChange = { draft = draft.copy(autoAdvanceSentence = it) }
-                    )
                 }
                 Spacer(Modifier.height(18.dp))
                 Text("발음 제한 시간: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
                 Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
-                Text("음성 인식 통과 기준: ${draft.passScore}점", fontWeight = FontWeight.Bold)
-                Slider(value = draft.passScore.toFloat(), onValueChange = { draft = draft.copy(passScore = it.toInt()) }, valueRange = 55f..95f, steps = 7)
                 Spacer(Modifier.height(12.dp))
             }
             Surface(shadowElevation = 10.dp, color = Color.White) {

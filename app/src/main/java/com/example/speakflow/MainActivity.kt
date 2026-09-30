@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
                 else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
             }
 
-            LaunchedEffect(state.phase, state.position) {
+            LaunchedEffect(state.phase, state.position, state.listenRequestId) {
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
                         val korean = state.settings.mode == LearningMode.TRANSLATION && it.korean.isNotBlank()
@@ -79,6 +79,16 @@ class MainActivity : ComponentActivity() {
                     }
                     LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE, LessonPhase.TIMED_OUT -> speech.stop()
                     else -> Unit
+                }
+            }
+
+            LaunchedEffect(state.feedbackSequence) {
+                val success = state.feedbackSuccess ?: return@LaunchedEffect
+                val sequence = state.feedbackSequence
+                if (sequence > 0L) {
+                    speech.playResultSound(success) {
+                        viewModel.onFeedbackFinished(sequence, success)
+                    }
                 }
             }
 

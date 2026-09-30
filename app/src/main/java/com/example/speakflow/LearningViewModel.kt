@@ -21,7 +21,7 @@ import java.io.File
 
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
-        const val RESULT_DISPLAY_MILLIS = 2_500L
+        const val INCORRECT_RESULT_DISPLAY_MILLIS = 1_500L
     }
     private val prefs = application.getSharedPreferences("learning", 0)
     private val datasetStore = DatasetStore(application)
@@ -98,7 +98,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     private fun resetWith(items: List<SentencePair>, name: String, id: String) {
         timerJob?.cancel()
         advanceJob?.cancel()
-        val order = buildOrder(items.size, _state.value.settings.order, _state.value.settings.repeatCount)
+        val order = buildOrder(items.size, _state.value.settings.order)
         _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id,
             heardText = "", liveText = "", score = null, allWordsMatched = false, remainingSeconds = 0, message = null) }
     }
@@ -115,7 +115,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         advanceJob?.cancel()
         _state.update {
-            it.copy(settings = settings, order = buildOrder(it.items.size, settings.order, settings.repeatCount), position = 0,
+            it.copy(settings = settings, order = buildOrder(it.items.size, settings.order), position = 0,
                 phase = LessonPhase.IDLE, heardText = "", liveText = "", score = null, allWordsMatched = false, remainingSeconds = 0)
         }
     }
@@ -124,13 +124,17 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         if (_state.value.current == null) return
         timerJob?.cancel()
         advanceJob?.cancel()
-        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, allWordsMatched = false, message = null) }
+        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
     }
 
     fun onPromptFinished() {
         if (_state.value.phase != LessonPhase.SPEAKING) return
         deadline = 0L
-        _state.update { it.copy(phase = LessonPhase.LISTENING, remainingSeconds = it.settings.timeoutSeconds) }
+        _state.update { it.copy(
+            phase = LessonPhase.LISTENING,
+            remainingSeconds = it.settings.timeoutSeconds,
+            listenRequestId = it.listenRequestId + 1
+        ) }
     }
 
     fun onRecognizerReady() {
@@ -156,55 +160,29 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val text = best?.first.orEmpty()
         val score = best?.second ?: 0
         val allWordsMatched = text.isNotBlank() && SpeechScorer.matchedWords(expected, text).all { it }
-        if (score >= _state.value.settings.passScore) {
+        if (allWordsMatched) {
             timerJob?.cancel()
-            _state.update { it.copy(phase = LessonPhase.CORRECT, heardText = text, liveText = text, score = score, allWordsMatched = allWordsMatched) }
-            val shouldAdvance = allWordsMatched || _state.value.hasAnotherRepeat || _state.value.settings.autoAdvanceSentence
-            if (shouldAdvance) {
-                advanceJob?.cancel()
-                advanceJob = viewModelScope.launch {
-                    delay(RESULT_DISPLAY_MILLIS)
-                    if (_state.value.phase == LessonPhase.CORRECT) {
-                        if (_state.value.allWordsMatched) nextSentence() else next()
-                    }
-                }
-            }
+            _state.update { it.copy(
+                phase = LessonPhase.CORRECT,
+                heardText = text,
+                liveText = text,
+                score = score,
+                allWordsMatched = true,
+                feedbackSuccess = true,
+                feedbackSequence = it.feedbackSequence + 1
+            ) }
         } else {
-            // Some recognition services finalize after a short pause. Keep the original
-            // deadline and reopen the microphone instead of ending the whole attempt.
-            if (remaining <= 0) {
-                timerJob?.cancel()
-                _state.update {
-                    val keepPrevious = (it.score ?: -1) > score
-                    it.copy(
-                        phase = LessonPhase.TIMED_OUT,
-                        heardText = if (keepPrevious) it.heardText else text,
-                        liveText = if (keepPrevious) it.liveText else text,
-                        score = maxOf(it.score ?: 0, score),
-                        allWordsMatched = false,
-                        remainingSeconds = 0
-                    )
-                }
-            } else {
-                _state.update {
-                    val keepPrevious = (it.score ?: -1) > score
-                    it.copy(
-                        phase = LessonPhase.RETRYING,
-                        heardText = if (keepPrevious) it.heardText else text,
-                        liveText = if (keepPrevious) it.liveText else text,
-                        score = maxOf(it.score ?: 0, score),
-                        allWordsMatched = false,
-                        remainingSeconds = remaining
-                    )
-                }
-                advanceJob?.cancel()
-                advanceJob = viewModelScope.launch {
-                    delay(300)
-                    if (_state.value.phase == LessonPhase.RETRYING && deadline > System.currentTimeMillis()) {
-                        _state.update { it.copy(phase = LessonPhase.LISTENING) }
-                    }
-                }
-            }
+            timerJob?.cancel()
+            _state.update { it.copy(
+                phase = LessonPhase.RETRYING,
+                heardText = text,
+                liveText = text,
+                score = score,
+                allWordsMatched = false,
+                feedbackSuccess = false,
+                feedbackSequence = it.feedbackSequence + 1,
+                remainingSeconds = remaining.coerceAtLeast(0)
+            ) }
         }
     }
 
@@ -222,7 +200,31 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         timerJob?.cancel()
         deadline = 0L
-        _state.update { it.copy(phase = LessonPhase.LISTENING, heardText = "", liveText = "", score = null, allWordsMatched = false, remainingSeconds = it.settings.timeoutSeconds) }
+        _state.update { it.copy(
+            phase = LessonPhase.LISTENING,
+            heardText = "",
+            liveText = "",
+            score = null,
+            allWordsMatched = false,
+            feedbackSuccess = null,
+            remainingSeconds = it.settings.timeoutSeconds,
+            listenRequestId = it.listenRequestId + 1
+        ) }
+    }
+
+    fun onFeedbackFinished(sequence: Long, success: Boolean) {
+        if (_state.value.feedbackSequence != sequence) return
+        if (success && _state.value.phase == LessonPhase.CORRECT) {
+            nextSentence()
+        } else if (!success && _state.value.phase == LessonPhase.RETRYING) {
+            advanceJob?.cancel()
+            advanceJob = viewModelScope.launch {
+                delay(INCORRECT_RESULT_DISPLAY_MILLIS)
+                if (_state.value.phase == LessonPhase.RETRYING && _state.value.feedbackSequence == sequence) {
+                    retryListening()
+                }
+            }
+        }
     }
 
     fun onRecognitionUnavailable(message: String) {
@@ -243,7 +245,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     fun previous() {
         timerJob?.cancel()
         advanceJob?.cancel()
-        _state.update { it.copy(position = (it.position - 1).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", score = null, allWordsMatched = false) }
+        _state.update { it.copy(position = (it.position - 1).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", score = null, allWordsMatched = false, feedbackSuccess = null) }
     }
 
     fun next() {
@@ -251,7 +253,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         _state.update {
             if (it.position >= it.order.lastIndex) it.copy(phase = LessonPhase.COMPLETE, remainingSeconds = 0)
-            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, allWordsMatched = false, remainingSeconds = 0)
+            else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
 
@@ -262,9 +264,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             val currentItemIndex = state.order.getOrNull(state.position)
             val nextPosition = ((state.position + 1)..state.order.lastIndex)
                 .firstOrNull { state.order.getOrNull(it) != currentItemIndex }
-            if (nextPosition == null) state.copy(phase = LessonPhase.COMPLETE, remainingSeconds = 0)
+            if (nextPosition == null) state.copy(phase = LessonPhase.COMPLETE, feedbackSuccess = null, remainingSeconds = 0)
             else state.copy(position = nextPosition, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", score = null,
-                allWordsMatched = false, remainingSeconds = 0)
+                allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
 
@@ -273,8 +275,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         _state.update {
             if (it.items.isEmpty()) it.copy(message = "먼저 엑셀 데이터셋을 불러오세요.")
-            else it.copy(order = buildOrder(it.items.size, it.settings.order, it.settings.repeatCount), position = 0, phase = LessonPhase.SPEAKING,
-                heardText = "", liveText = "", score = null, allWordsMatched = false, remainingSeconds = 0)
+            else it.copy(order = buildOrder(it.items.size, it.settings.order), position = 0, phase = LessonPhase.SPEAKING,
+                heardText = "", liveText = "", score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
     }
 
@@ -289,7 +291,21 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 _state.update { it.copy(remainingSeconds = remaining) }
                 delay(250)
             }
-            _state.update { it.copy(phase = LessonPhase.TIMED_OUT, remainingSeconds = 0) }
+            _state.update {
+                if (it.phase != LessonPhase.LISTENING) it else {
+                    val recognized = it.liveText
+                    val expected = it.current?.english.orEmpty()
+                    it.copy(
+                        phase = LessonPhase.RETRYING,
+                        heardText = recognized,
+                        score = SpeechScorer.score(expected, recognized),
+                        allWordsMatched = false,
+                        feedbackSuccess = false,
+                        feedbackSequence = it.feedbackSequence + 1,
+                        remainingSeconds = 0
+                    )
+                }
+            }
         }
     }
 
@@ -314,8 +330,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         )
     }
 
-    private fun buildOrder(size: Int, order: PlayOrder, repeatCount: Int): List<Int> =
+    private fun buildOrder(size: Int, order: PlayOrder): List<Int> =
         (0 until size).toList()
             .let { if (order == PlayOrder.RANDOM) it.shuffled() else it }
-            .flatMap { index -> List(repeatCount.coerceIn(1, 5)) { index } }
 }
