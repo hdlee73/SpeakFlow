@@ -176,7 +176,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 score = score,
                 allWordsMatched = true,
                 feedbackSuccess = true,
-                feedbackSequence = it.feedbackSequence + 1
+                feedbackSequence = state.feedbackSequence + 1
             ) }
         } else if (remaining > 0 && matchedCoverage < 60) {
             // Android may finalize a fragment after a short pause even though the
