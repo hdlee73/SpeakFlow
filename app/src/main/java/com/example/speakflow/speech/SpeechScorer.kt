@@ -9,6 +9,12 @@ object SpeechScorer {
         return evaluate(expected, actual).matchedDisplayWords
     }
 
+    fun unmatchedText(expected: String, actual: String): String {
+        val words = displayWords(expected)
+        val matched = matchedWords(expected, actual)
+        return words.filterIndexed { index, _ -> !matched.getOrElse(index) { false } }.joinToString(" ")
+    }
+
     fun displayWords(value: String): List<String> = value.trim().split(Regex("\\s+")).filter(String::isNotBlank)
 
     fun score(expected: String, actual: String): Int = evaluate(expected, actual).score

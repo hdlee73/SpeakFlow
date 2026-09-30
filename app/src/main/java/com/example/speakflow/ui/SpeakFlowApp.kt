@@ -145,15 +145,20 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                val revealEnglish = !translation || item.korean.isBlank() || state.phase in setOf(
+                val revealEnglish = !translation || item.korean.isBlank() || !state.retryText.isNullOrBlank() || state.phase in setOf(
                     LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
                 )
                 if (!revealEnglish) {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
                 } else {
-                    val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
-                    RealtimeSentence(item.english, state.liveText, fontSize, lineHeight)
+                    val displayEnglish = state.retryText ?: item.english
+                    if (!state.retryText.isNullOrBlank() && state.phase != LessonPhase.CORRECT) {
+                        Text("다시 발음할 부분", color = Color(0xFFB45309), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(6.dp))
+                    }
+                    val (fontSize, lineHeight) = adaptiveTextSize(displayEnglish.length, expanded)
+                    RealtimeSentence(displayEnglish, state.liveText, fontSize, lineHeight)
                     val showTranslation = item.korean.isNotBlank() && state.phase in setOf(
                         LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
                     )
@@ -371,7 +376,7 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                 Surface(color = Blue.copy(alpha = .08f), shape = RoundedCornerShape(14.dp)) {
                     Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text("✓ 모든 단어 일치: 알림음 후 다음 문장으로 자동 이동", fontSize = 13.sp)
-                        Text("• 일부 불일치: 다른 알림음 후 자동으로 다시 발음", fontSize = 13.sp)
+                        Text("• 일부 불일치: 다른 알림음 후 틀린 부분만 자동 재발음", fontSize = 13.sp)
                         Text("일부가 다를 때 다음 문장 이동은 화면 버튼을 이용합니다.", color = Color.Gray, fontSize = 12.sp)
                     }
                 }

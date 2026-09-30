@@ -71,7 +71,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if (requiredPermissions.isEmpty()) {
-                            speech.listen(state.current?.english.orEmpty())
+                            speech.listen(state.retryText ?: state.current?.english.orEmpty())
                         } else {
                             if (Manifest.permission.BLUETOOTH_CONNECT in requiredPermissions) bluetoothPermissionRequested = true
                             audioPermissions.launch(requiredPermissions.toTypedArray())

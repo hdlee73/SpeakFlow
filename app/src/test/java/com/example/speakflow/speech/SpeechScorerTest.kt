@@ -23,6 +23,13 @@ class SpeechScorerTest {
         assertTrue(SpeechScorer.score("I know you want to help but you are still new", "I know you want help but you are still new") >= 68)
     }
 
+    @Test fun retryTextContainsOnlyUnmatchedWords() {
+        assertEquals("don't open", SpeechScorer.unmatchedText(
+            "They usually don't open until 4 pm.",
+            "They usually done opne until 4 pm"
+        ))
+    }
+
     @Test fun contractionHighlightUsesSameNormalizedAlignmentAsScore() {
         val evaluation = SpeechScorer.evaluate(
             "I'm on hand for the event on behalf of my boss.",
