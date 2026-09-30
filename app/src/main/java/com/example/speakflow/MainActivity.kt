@@ -86,8 +86,13 @@ class MainActivity : ComponentActivity() {
                 val success = state.feedbackSuccess ?: return@LaunchedEffect
                 val sequence = state.feedbackSequence
                 if (sequence > 0L) {
-                    speech.playResultSound(success) {
-                        viewModel.onFeedbackFinished(sequence, success)
+                    if (success) {
+                        speech.playSuccessSound {
+                            viewModel.onFeedbackFinished(sequence, true)
+                        }
+                    } else {
+                        // Incorrect/unfinished attempts remain completely silent.
+                        viewModel.onFeedbackFinished(sequence, false)
                     }
                 }
             }

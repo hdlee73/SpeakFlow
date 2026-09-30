@@ -257,14 +257,13 @@ class SpeechEngine(
         pendingReadyTimeout = null
     }
 
-    fun playResultSound(success: Boolean, onFinished: () -> Unit) {
+    fun playSuccessSound(onFinished: () -> Unit) {
         runCatching {
-            val sound = if (success) R.raw.result_success else R.raw.result_incorrect
             val attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                 .build()
-            val player = MediaPlayer.create(appContext, sound, attributes, 0)
+            val player = MediaPlayer.create(appContext, R.raw.result_success, attributes, 0)
                 ?: error("결과음을 준비하지 못했습니다.")
             var finished = false
             fun finish() {
