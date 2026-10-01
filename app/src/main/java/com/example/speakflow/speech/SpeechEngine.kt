@@ -50,6 +50,12 @@ class SpeechEngine(
     var voiceId: String = ""
     var outdoorAudio: Boolean = false
     var phoneMic: Boolean = false
+    /**
+     * Biasing strings push the recognizer toward the expected sentence, so a
+     * mispronounced word is often "corrected" into the right one. Only the EASY
+     * scoring level enables it; otherwise the recognizer reports what it heard.
+     */
+    var biasTowardExpected: Boolean = false
     var recognitionLanguage: String = "en-US"
     private var injectionFailed = false
     private var outdoorSource: OutdoorAudioSource? = null
@@ -218,7 +224,7 @@ class SpeechEngine(
                 voice == null -> "선택 지역의 음성이 없습니다. TTS 엔진 설정을 확인하세요."
                 direct != null -> "직접 선택: ${voice.name}"
                 knownGender(voice) == gender -> "${locale.country} ${gender?.label}: ${voice.name}"
-                else -> "성별을 확인할 수 없어 미리듣기로 선택해 주세요: ${voice.name}"
+                else -> "자동 선택 (엔진이 성별 정보를 제공하지 않음): ${voice.name}"
             }
             mainHandler.post { onVoiceChanged(label) }
         }
@@ -274,7 +280,7 @@ class SpeechEngine(
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minimumLength)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3_000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_800L)
-            if (Build.VERSION.SDK_INT >= 33) {
+            if (Build.VERSION.SDK_INT >= 33 && biasTowardExpected) {
                 val normalizedWords = expectedWords.map { it.trim('.', ',', '!', '?', ';', ':', '"', '\'', '’') }
                     .filter { it.length >= 3 }
                 val phrases = buildList {
@@ -284,6 +290,8 @@ class SpeechEngine(
                 }.distinct().take(24)
                 putStringArrayListExtra(RecognizerIntent.EXTRA_BIASING_STRINGS, ArrayList(phrases))
                 putExtra(RecognizerIntent.EXTRA_ENABLE_BIASING_DEVICE_CONTEXT, true)
+            }
+            if (Build.VERSION.SDK_INT >= 33) {
                 putExtra(RecognizerIntent.EXTRA_ENABLE_FORMATTING, RecognizerIntent.FORMATTING_OPTIMIZE_QUALITY)
                 putExtra(RecognizerIntent.EXTRA_HIDE_PARTIAL_TRAILING_PUNCTUATION, true)
             }

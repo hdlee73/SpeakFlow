@@ -61,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 speech.voiceId = state.settings.voiceId
                 speech.phoneMic = state.settings.phoneMic
                 speech.outdoorAudio = state.settings.outdoorAudio
+                speech.biasTowardExpected = state.settings.strictness == com.example.speakflow.model.RecognitionStrictness.EASY
                 speech.recognitionLanguage = if (state.settings.voiceAccent == com.example.speakflow.model.VoiceAccent.UK) "en-GB" else "en-US"
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
@@ -85,7 +86,11 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if (requiredPermissions.isEmpty()) {
-                            speech.listen(com.example.speakflow.speech.RetryEvaluator.remaining(state.current?.english.orEmpty(), state.matchedWords))
+                            val expected = state.current?.english.orEmpty()
+                            speech.listen(
+                                if (state.settings.strictness == com.example.speakflow.model.RecognitionStrictness.STRICT) expected
+                                else com.example.speakflow.speech.RetryEvaluator.remaining(expected, state.matchedWords)
+                            )
                         } else {
                             if (Manifest.permission.BLUETOOTH_CONNECT in requiredPermissions) bluetoothPermissionRequested = true
                             audioPermissions.launch(requiredPermissions.toTypedArray())

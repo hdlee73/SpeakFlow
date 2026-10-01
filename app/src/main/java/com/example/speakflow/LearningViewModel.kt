@@ -234,6 +234,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putString("voice_id", settings.voiceId)
             .putBoolean("outdoor_audio", settings.outdoorAudio)
             .putBoolean("phone_mic", settings.phoneMic)
+            .putString("strictness", settings.strictness.name)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -282,9 +283,12 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val expected = _state.value.current?.english ?: return
         val remaining = if (deadline == 0L) _state.value.settings.timeoutSeconds
             else ((deadline - SystemClock.elapsedRealtime() + 999) / 1_000).toInt().coerceAtLeast(0)
-        val result = RetryEvaluator.evaluate(expected, candidates, _state.value.matchedWords)
+        val strictness = _state.value.settings.strictness
+        val result = RetryEvaluator.evaluate(expected, candidates, _state.value.matchedWords, strictness)
         val text = result.text.ifBlank { _state.value.heardText }
-        val matchedWords = result.matched
+        // An empty callback (recognizer error/no match) must not erase what was shown.
+        val matchedWords = if (result.text.isBlank() && _state.value.matchedWords.size == result.matched.size)
+            _state.value.matchedWords else result.matched
         val score = if (matchedWords.all { it }) 100 else matchedWords.count { it } * 100 / matchedWords.size.coerceAtLeast(1)
         val allWordsMatched = matchedWords.isNotEmpty() && matchedWords.all { it }
         if (allWordsMatched) {
@@ -312,7 +316,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 matchedWords = matchedWords,
                 score = score,
                 allWordsMatched = false,
-                retryText = RetryEvaluator.remaining(expected, matchedWords).takeIf { matchedWords.any { it } },
+                retryText = RetryEvaluator.remaining(expected, matchedWords)
+                    .takeIf { matchedWords.any { it } && strictness != RecognitionStrictness.STRICT },
                 remainingSeconds = remaining,
                 listenRequestId = it.listenRequestId + 1
             ) }
@@ -342,9 +347,12 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val latest = candidates.firstOrNull(String::isNotBlank).orEmpty()
         if (latest.isBlank()) return
         val expected = _state.value.current?.english ?: return
-        val preview = RetryEvaluator.evaluate(expected, listOf(latest), _state.value.matchedWords)
+        val preview = RetryEvaluator.evaluate(expected, listOf(latest), _state.value.matchedWords, _state.value.settings.strictness)
         if (preview.matched.isNotEmpty() && preview.matched.all { it }) {
             onRecognition(listOf(latest))
+        } else if (_state.value.settings.strictness == RecognitionStrictness.STRICT) {
+            // Each utterance is judged on its own: replace, don't accumulate.
+            _state.update { it.copy(liveText = latest, matchedWords = preview.matched) }
         } else _state.update { it.copy(liveText = latest) }
     }
 
@@ -354,7 +362,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         deadline = SystemClock.elapsedRealtime() + 20_000L
         _state.update {
-            val preservePartialMatches = !it.retryText.isNullOrBlank() && !it.allWordsMatched
+            val preservePartialMatches = !it.retryText.isNullOrBlank() && !it.allWordsMatched &&
+                it.settings.strictness != RecognitionStrictness.STRICT
             it.copy(
                 phase = LessonPhase.LISTENING,
                 heardText = "",
@@ -465,17 +474,14 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             }
             if (_state.value.phase == LessonPhase.LISTENING) {
                 val snapshot = _state.value
-                val liveMatches = RetryEvaluator.evaluate(snapshot.current?.english.orEmpty(), listOf(snapshot.liveText), snapshot.matchedWords).matched
-                val complete = liveMatches.isNotEmpty() && liveMatches.indices.all {
-                    liveMatches[it] || snapshot.matchedWords.getOrElse(it) { false }
-                }
-                recordAttempt(complete)
+                val liveMatches = timeoutMatches(snapshot)
+                recordAttempt(liveMatches.isNotEmpty() && liveMatches.all { it })
             }
             _state.update {
                 if (it.phase != LessonPhase.LISTENING) it else {
                     val recognized = it.liveText
                     val expected = it.current?.english.orEmpty()
-                    val matchedWords = RetryEvaluator.evaluate(expected, listOf(recognized), it.matchedWords).matched
+                    val matchedWords = timeoutMatches(it)
                     val complete = matchedWords.isNotEmpty() && matchedWords.all { matched -> matched }
                     it.copy(
                         phase = if (complete) LessonPhase.CORRECT else LessonPhase.RETRYING,
@@ -485,7 +491,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                             .joinToString(" ")
                             .ifBlank { expected },
                         matchedWords = matchedWords,
-                        score = SpeechScorer.score(expected, recognized),
+                        score = SpeechScorer.score(expected, recognized, it.settings.strictness),
                         allWordsMatched = complete,
                         feedbackSuccess = complete,
                         feedbackSequence = it.feedbackSequence + 1,
@@ -494,6 +500,16 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 }
             }
         }
+    }
+
+    private fun timeoutMatches(snapshot: LearningUiState): List<Boolean> {
+        val expected = snapshot.current?.english.orEmpty()
+        val strictness = snapshot.settings.strictness
+        val live = RetryEvaluator.evaluate(expected, listOf(snapshot.liveText), snapshot.matchedWords, strictness).matched
+        // In STRICT mode the last utterance stands on its own, but keep whatever the
+        // final recognizer result already confirmed for that same utterance.
+        return if (strictness == RecognitionStrictness.STRICT && live.count { it } < snapshot.matchedWords.count { it })
+            snapshot.matchedWords else live
     }
 
     private fun loadSettingsWithMigration(): LearningSettings {
@@ -519,7 +535,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         outdoorAudio = prefs.getBoolean("outdoor_audio", false),
         phoneMic = prefs.getBoolean("phone_mic", false),
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
-        voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE)
+        voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE),
+        strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL)
         )
     }
 

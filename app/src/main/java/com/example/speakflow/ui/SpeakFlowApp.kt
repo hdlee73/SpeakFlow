@@ -29,6 +29,7 @@ private val Blue = Color(0xFF285BE6)
 private val Mint = Color(0xFF43C6A4)
 private val Ink = Color(0xFF17243D)
 private val Canvas = Color(0xFFF4F7FF)
+private val Miss = Color(0xFFE5484D)
 
 @Composable
 fun SpeakFlowApp(
@@ -81,7 +82,7 @@ fun SpeakFlowApp(
                 }
             }
         }
-        if (settingsOpen) SettingsSheet(state.settings, state.voices, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (settingsOpen) SettingsSheet(state.settings, state.voices, state.voiceLabel, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
         if (state.editingDataset != null) DatasetEditor(state.editingDataset, state.editingItems, onEditorClose, onSentenceSave)
         if (statisticsOpen) StatisticsSheet(state.statistics) { statisticsOpen = false }
         if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence, onDatasetEdit)
@@ -134,7 +135,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
     val translation = state.settings.mode == LearningMode.TRANSLATION
     val statusColor = when (state.phase) {
         LessonPhase.CORRECT -> Mint
-        LessonPhase.TIMED_OUT -> Color(0xFFF59E0B)
+        LessonPhase.TIMED_OUT, LessonPhase.RETRYING -> Color(0xFFF59E0B)
         else -> Blue
     }
     Card(
@@ -149,7 +150,6 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             LessonStatusHeader(state, statusColor)
             Text("문장 ${state.position / state.settings.repeatCount + 1}/${state.items.size} · 반복 ${state.repeatNumber}/${state.settings.repeatCount}", fontSize = 12.sp, color = Blue)
             Text(state.microphoneLabel, color = Color(0xFF667085), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            if (state.voiceLabel.isNotBlank()) Text(state.voiceLabel, fontSize = 10.sp, color = Color.Gray, maxLines = 2)
             Spacer(Modifier.height(12.dp))
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -164,7 +164,11 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                     Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
                 } else {
                     val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
-                    RealtimeSentence(item.english, state.liveText, state.matchedWords, fontSize, lineHeight)
+                    RealtimeSentence(
+                        item.english, state.liveText, state.matchedWords, fontSize, lineHeight,
+                        strictness = state.settings.strictness,
+                        highlightMisses = state.phase == LessonPhase.RETRYING
+                    )
                     val showTranslation = item.korean.isNotBlank() && state.phase in setOf(
                         LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
                     )
@@ -175,7 +179,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                 }
                 if (state.phase == LessonPhase.LISTENING && !state.retryText.isNullOrBlank()) {
                     Spacer(Modifier.height(12.dp))
-                    Text("다시 말할 부분: ${state.retryText}", fontSize = 16.sp, color = Blue, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    Text("다시 말할 부분: ${state.retryText}", fontSize = 16.sp, color = Miss, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                     Text("이 부분만 다시 말해도 됩니다.", fontSize = 12.sp, color = Color.Gray)
                 }
                 state.score?.let {
@@ -245,17 +249,25 @@ private fun RealtimeSentence(
     liveText: String,
     confirmedMatches: List<Boolean>,
     fontSize: androidx.compose.ui.unit.TextUnit,
-    lineHeight: androidx.compose.ui.unit.TextUnit
+    lineHeight: androidx.compose.ui.unit.TextUnit,
+    strictness: RecognitionStrictness,
+    highlightMisses: Boolean
 ) {
     val words = SpeechScorer.displayWords(expected)
-    val liveMatches = SpeechScorer.matchedWords(expected, liveText)
+    val liveMatches = SpeechScorer.matchedWords(expected, liveText, strictness)
     val matched = words.indices.map { index ->
         confirmedMatches.getOrElse(index) { false } || liveMatches.getOrElse(index) { false }
     }
     val styled = buildAnnotatedString {
         words.forEachIndexed { index, word ->
             if (index > 0) append(" ")
-            withStyle(SpanStyle(color = if (matched.getOrElse(index) { false }) Blue else Color(0xFFBFC2C7), fontWeight = if (matched.getOrElse(index) { false }) FontWeight.ExtraBold else FontWeight.Bold)) {
+            val hit = matched.getOrElse(index) { false }
+            val color = when {
+                hit -> Blue
+                highlightMisses -> Miss
+                else -> Color(0xFFBFC2C7)
+            }
+            withStyle(SpanStyle(color = color, fontWeight = if (hit) FontWeight.ExtraBold else FontWeight.Bold)) {
                 append(word)
             }
         }
@@ -391,7 +403,7 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
+private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, voiceLabel: String, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
     var draft by remember(current) { mutableStateOf(current) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
@@ -411,6 +423,14 @@ private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice
                     PlayOrder.entries.forEach { order -> FilterChip(selected = draft.order == order, onClick = { draft = draft.copy(order = order) }, label = { Text(order.label) }) }
                 }
                 Spacer(Modifier.height(18.dp))
+                Text("발음 판정", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RecognitionStrictness.entries.forEach { level ->
+                        FilterChip(selected = draft.strictness == level, onClick = { draft = draft.copy(strictness = level) }, label = { Text(level.label) })
+                    }
+                }
+                Text(draft.strictness.description, color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(18.dp))
                 Text("영어 음성", fontWeight = FontWeight.Bold)
                 Text("발음 지역", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -425,6 +445,7 @@ private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice
                     }
                 }
                 Text("엔진이 성별을 제공하지 않으면 남성·여성을 자동 확정할 수 없습니다. 미리듣기로 실제 음성을 선택하세요.", color = Color.Gray, fontSize = 12.sp)
+                if (voiceLabel.isNotBlank()) Text("현재 음성: $voiceLabel", color = Color.Gray, fontSize = 11.sp)
                 var voicesOpen by remember { mutableStateOf(false) }
                 OutlinedButton(onClick = { voicesOpen = !voicesOpen }, modifier = Modifier.fillMaxWidth()) { Text("실제 음성 선택 · 미리듣기") }
                 if (voicesOpen) {

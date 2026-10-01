@@ -22,6 +22,12 @@ enum class VoiceAccent(val label: String) { US("미국"), UK("영국") }
 
 enum class VoiceGender(val label: String) { FEMALE("여성"), MALE("남성") }
 
+enum class RecognitionStrictness(val label: String, val description: String) {
+    EASY("쉬움", "비슷한 발음도 인정하고 인식 후보 여러 개 중 가장 가까운 것을 채택합니다 (이전 방식)."),
+    NORMAL("보통", "단어가 정확히 인식되어야 인정합니다. 틀린 부분만 다시 말해 채울 수 있습니다."),
+    STRICT("엄격", "단어가 정확해야 하고, 한 번의 발화로 문장 전체를 말해야 인정합니다.")
+}
+
 enum class LessonPhase {
     IDLE, SPEAKING, LISTENING, CORRECT, RETRYING, TIMED_OUT, PAUSED, COMPLETE
 }
@@ -38,7 +44,8 @@ data class LearningSettings(
     val outdoorAudio: Boolean = false,
     val phoneMic: Boolean = false,
     val voiceAccent: VoiceAccent = VoiceAccent.US,
-    val voiceGender: VoiceGender = VoiceGender.FEMALE
+    val voiceGender: VoiceGender = VoiceGender.FEMALE,
+    val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL
 )
 
 data class LearningUiState(
