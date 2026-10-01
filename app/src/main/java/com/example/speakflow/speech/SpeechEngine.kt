@@ -17,6 +17,7 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import androidx.core.content.ContextCompat
 import com.example.speakflow.R
 import java.util.Locale
@@ -54,7 +55,7 @@ class SpeechEngine(
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                         .build()
                 )
-                tts.setSpeechRate(.92f)
+                tts.setPitch(1f)
                 pendingPrompt?.also { (text, korean) ->
                     pendingPrompt = null
                     speakNow(text, korean)
@@ -129,15 +130,43 @@ class SpeechEngine(
     }
 
     private fun speakNow(text: String, korean: Boolean) {
-        val languageResult = tts.setLanguage(if (korean) Locale.KOREA else Locale.US)
+        val locale = if (korean) Locale.KOREA else Locale.US
+        val languageResult = tts.setLanguage(locale)
         if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
             onUnavailable(if (korean) "한국어 TTS 음성이 설치되어 있지 않습니다." else "영어 TTS 음성이 설치되어 있지 않습니다.")
             return
         }
+        selectNaturalVoice(locale)
+        tts.setSpeechRate(if (korean) .90f else .84f)
+        tts.setPitch(1f)
         val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
-        if (tts.speak(text, TextToSpeech.QUEUE_FLUSH, params, "prompt") == TextToSpeech.ERROR) {
+        if (tts.speak(naturalizeForSpeech(text, korean), TextToSpeech.QUEUE_FLUSH, params, "prompt") == TextToSpeech.ERROR) {
             onUnavailable("예문 음성을 재생하지 못했습니다. 미디어 음량을 확인해 주세요.")
         }
+    }
+
+    private fun selectNaturalVoice(locale: Locale) {
+        val voice = tts.voices.orEmpty()
+            .filter { it.locale.language == locale.language }
+            .maxWithOrNull(
+                compareBy<Voice> { it.locale.country == locale.country }
+                    .thenBy { it.quality }
+                    .thenBy { if (it.isNetworkConnectionRequired) 1 else 0 }
+                    .thenBy { -it.latency }
+            )
+        if (voice != null) runCatching { tts.voice = voice }
+    }
+
+    private fun naturalizeForSpeech(text: String, korean: Boolean): String {
+        val trimmed = text.trim()
+        if (korean || trimmed.isEmpty() || trimmed.last() in ".?!") return trimmed
+        val firstWord = trimmed.substringBefore(' ').lowercase(Locale.US).trim('"', '\'', '“', '‘')
+        val questionStarters = setOf(
+            "who", "what", "when", "where", "why", "how",
+            "am", "is", "are", "was", "were", "do", "does", "did",
+            "can", "could", "will", "would", "shall", "should", "have", "has", "had"
+        )
+        return trimmed + if (firstWord in questionStarters) "?" else "."
     }
 
     fun listen(expectedText: String) {
