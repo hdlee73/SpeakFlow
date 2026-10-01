@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
                 speech.voiceId = state.settings.voiceId
                 speech.phoneMic = state.settings.phoneMic
                 speech.outdoorAudio = state.settings.outdoorAudio
-                speech.biasTowardExpected = state.settings.strictness == com.example.speakflow.model.RecognitionStrictness.EASY
+                speech.biasTowardExpected = state.settings.strictness != com.example.speakflow.model.RecognitionStrictness.STRICT
                 speech.recognitionLanguage = if (state.settings.voiceAccent == com.example.speakflow.model.VoiceAccent.UK) "en-GB" else "en-US"
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {

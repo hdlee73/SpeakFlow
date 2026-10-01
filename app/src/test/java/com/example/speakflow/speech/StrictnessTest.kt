@@ -28,13 +28,19 @@ class StrictnessTest {
         assertTrue(SpeechScorer.matchedWords("Okay, I'd love to.", "OK I would love to").all { it })
     }
 
-    @Test fun onlyTopRecognizerCandidateIsTrustedByDefault() {
-        val result = RetryEvaluator.evaluate(sentence,
-            listOf("my missing keys turn up in my jacket packet", sentence), emptyList())
-        assertFalse(result.matched.all { it })
-        val easy = RetryEvaluator.evaluate(sentence,
-            listOf("my missing keys turn up in my jacket packet", sentence), emptyList(), RecognitionStrictness.EASY)
+    @Test fun normalModeLooksAtTopThreeCandidatesOnly() {
+        val noise = "front of plate without living anymore"
+        val second = RetryEvaluator.evaluate(sentence, listOf(noise, sentence), emptyList())
+        assertTrue(second.matched.all { it })
+        val fourth = RetryEvaluator.evaluate(sentence, listOf(noise, noise, noise, sentence), emptyList())
+        assertFalse(fourth.matched.all { it })
+        val easy = RetryEvaluator.evaluate(sentence, listOf(noise, noise, noise, sentence), emptyList(), RecognitionStrictness.EASY)
         assertTrue(easy.matched.all { it })
+    }
+
+    @Test fun strictModeTrustsOnlyTheTopCandidate() {
+        val strict = RetryEvaluator.evaluate(sentence, listOf("front of plate", sentence), emptyList(), RecognitionStrictness.STRICT)
+        assertFalse(strict.matched.all { it })
     }
 
     @Test fun strictModeDoesNotAccumulateFragments() {

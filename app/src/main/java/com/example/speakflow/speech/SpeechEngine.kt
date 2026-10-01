@@ -51,9 +51,9 @@ class SpeechEngine(
     var outdoorAudio: Boolean = false
     var phoneMic: Boolean = false
     /**
-     * Biasing strings push the recognizer toward the expected sentence, so a
-     * mispronounced word is often "corrected" into the right one. Only the EASY
-     * scoring level enables it; otherwise the recognizer reports what it heard.
+     * Biasing strings nudge the recognizer toward the expected sentence. This is what
+     * keeps recognition usable with a noisy or narrow-band (Bluetooth) microphone,
+     * but it can also "correct" a mispronounced word, so STRICT turns it off.
      */
     var biasTowardExpected: Boolean = false
     var recognitionLanguage: String = "en-US"

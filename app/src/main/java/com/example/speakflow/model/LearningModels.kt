@@ -23,9 +23,9 @@ enum class VoiceAccent(val label: String) { US("미국"), UK("영국") }
 enum class VoiceGender(val label: String) { FEMALE("여성"), MALE("남성") }
 
 enum class RecognitionStrictness(val label: String, val description: String) {
-    EASY("쉬움", "비슷한 발음도 인정하고 인식 후보 여러 개 중 가장 가까운 것을 채택합니다 (이전 방식)."),
-    NORMAL("보통", "단어가 정확히 인식되어야 인정합니다. 틀린 부분만 다시 말해 채울 수 있습니다."),
-    STRICT("엄격", "단어가 정확해야 하고, 한 번의 발화로 문장 전체를 말해야 인정합니다.")
+    EASY("쉬움", "비슷한 발음도 인정하고 인식 후보 8개 중 가장 가까운 것을 채택합니다. 시끄러운 곳에 알맞습니다 (이전 방식)."),
+    NORMAL("보통", "단어가 정확히 인식되어야 인정합니다. 인식 후보 상위 3개를 보고, 틀린 부분만 다시 말해 채울 수 있습니다."),
+    STRICT("엄격", "단어가 정확해야 하고 인식 1순위 결과만 봅니다. 예문 힌트 없이 한 번의 발화로 문장 전체를 말해야 인정합니다.")
 }
 
 enum class LessonPhase {
