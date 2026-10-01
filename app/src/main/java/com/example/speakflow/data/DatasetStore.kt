@@ -13,6 +13,15 @@ class DatasetStore(private val context: Context) {
     private val prefs = context.getSharedPreferences("learning", 0)
     private val directory = File(context.filesDir, "datasets").apply { mkdirs() }
 
+    fun ensureDefault() {
+        if (prefs.getBoolean("daily_500_installed", false)) return
+        val file = File(directory, "daily_500.csv")
+        context.assets.open("daily_500.csv").use { input -> file.outputStream().use(input::copyTo) }
+        val count = file.inputStream().use { DatasetParser.parse(it, file.name) }.size
+        saveIndex(list() + SavedDataset("daily_500", "생활 영어 패턴 500.csv", file.name, count))
+        prefs.edit().putBoolean("daily_500_installed", true).apply()
+    }
+
     fun list(): List<SavedDataset> = runCatching {
         val array = JSONArray(prefs.getString("datasets_index", "[]"))
         buildList {

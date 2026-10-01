@@ -42,6 +42,9 @@ class SpeechEngine(
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
+    var mirrorAudio: Boolean = false
+    private var promptVersion = 0L
+    private var currentPromptId: String? = null
     private var ttsReady = false
     private var acceptingRecognitionResults = false
     private var recognitionStarting = false
@@ -55,6 +58,7 @@ class SpeechEngine(
     private val recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
 
     init {
+        if (Build.VERSION.SDK_INT >= 29) audioManager?.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
         tts = TextToSpeech(context.applicationContext) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) {
@@ -80,10 +84,10 @@ class SpeechEngine(
                 // Bluetooth media playback can finish at the TTS engine slightly before
                 // the headset has rendered its final audio frames. Leave a short tail
                 // before switching the same device into communication/microphone mode.
-                mainHandler.postDelayed(onPromptFinished, 300L)
+                mainHandler.postDelayed({ if (utteranceId != null && utteranceId == currentPromptId) onPromptFinished() }, 300L)
             }
             @Deprecated("Deprecated in Java") override fun onError(utteranceId: String?) {
-                mainHandler.post { onUnavailable("예문 음성을 재생하지 못했습니다. 휴대전화의 미디어 음량과 TTS 설정을 확인해 주세요.") }
+                mainHandler.post { if (utteranceId != null && utteranceId == currentPromptId) onUnavailable("예문 음성을 재생하지 못했습니다. 휴대전화의 미디어 음량과 TTS 설정을 확인해 주세요.") }
             }
         })
         recognizer?.setRecognitionListener(object : RecognitionListener {
@@ -126,6 +130,7 @@ class SpeechEngine(
     }
 
     fun speak(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
+        currentPromptId = null
         cancelPendingListen()
         acceptingRecognitionResults = false
         recognizer?.cancel()
@@ -152,7 +157,8 @@ class SpeechEngine(
         tts.setSpeechRate(if (korean) .90f else .84f)
         tts.setPitch(1f)
         val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
-        if (tts.speak(naturalizeForSpeech(text, korean), TextToSpeech.QUEUE_FLUSH, params, "prompt") == TextToSpeech.ERROR) {
+        currentPromptId = "prompt-${++promptVersion}"
+        if (tts.speak(naturalizeForSpeech(text, korean), TextToSpeech.QUEUE_FLUSH, params, currentPromptId) == TextToSpeech.ERROR) {
             onUnavailable("예문 음성을 재생하지 못했습니다. 미디어 음량을 확인해 주세요.")
         }
     }
@@ -325,6 +331,7 @@ class SpeechEngine(
             AudioManager.STREAM_NOTIFICATION,
             AudioManager.STREAM_VOICE_CALL
         ).forEach { stream ->
+            if (mirrorAudio && stream in setOf(AudioManager.STREAM_MUSIC, AudioManager.STREAM_VOICE_CALL)) return@forEach
             if (stream !in streamsMutedForRecognition && !audioManager.isStreamMute(stream)) {
                 runCatching {
                     audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
@@ -343,7 +350,7 @@ class SpeechEngine(
     }
 
     fun playSuccessSound(onFinished: () -> Unit) {
-        restoreRecognitionAudio()
+        stop()
         runCatching {
             val attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -365,6 +372,6 @@ class SpeechEngine(
         }.onFailure { mainHandler.post(onFinished) }
     }
 
-    fun stop() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
-    fun destroy() { pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
+    fun stop() { currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
+    fun destroy() { currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
 }

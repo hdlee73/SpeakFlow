@@ -31,8 +31,9 @@ data class LearningSettings(
     val order: PlayOrder = PlayOrder.SEQUENTIAL,
     val repeatCount: Int = 1,
     val autoAdvanceSentence: Boolean = false,
-    val timeoutSeconds: Int = 10,
+    val timeoutSeconds: Int = 20,
     val passScore: Int = 78,
+    val mirrorAudio: Boolean = false,
     val voiceAccent: VoiceAccent = VoiceAccent.US,
     val voiceGender: VoiceGender = VoiceGender.FEMALE
 )
@@ -54,9 +55,11 @@ data class LearningUiState(
     val allWordsMatched: Boolean = false,
     val feedbackSequence: Long = 0L,
     val feedbackSuccess: Boolean? = null,
+    val promptRequestId: Long = 0L,
     val listenRequestId: Long = 0L,
     val microphoneLabel: String = "휴대전화 마이크",
     val remainingSeconds: Int = 0,
+    val statistics: List<DailyLearning> = emptyList(),
     val message: String? = null
 ) {
     val current: SentencePair? get() = order.getOrNull(position)?.let(items::getOrNull)
@@ -64,3 +67,5 @@ data class LearningUiState(
     val repeatNumber: Int get() = if (order.isEmpty()) 0 else position % settings.repeatCount.coerceAtLeast(1) + 1
     val hasAnotherRepeat: Boolean get() = order.getOrNull(position) == order.getOrNull(position + 1)
 }
+
+data class DailyLearning(val date: String, val attempts: Int = 0, val correct: Int = 0, val seconds: Long = 0)

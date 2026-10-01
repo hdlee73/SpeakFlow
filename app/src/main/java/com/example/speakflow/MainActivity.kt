@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             var datasetsOpen by rememberSaveable { mutableStateOf(false) }
             var bluetoothPermissionRequested by rememberSaveable { mutableStateOf(false) }
+            SideEffect { hasOpenDialog = settingsOpen || datasetsOpen }
             val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let(viewModel::importDataset)
             }
@@ -52,7 +54,8 @@ class MainActivity : ComponentActivity() {
                 else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
             }
 
-            LaunchedEffect(state.phase, state.position, state.listenRequestId) {
+            LaunchedEffect(state.phase, state.position, state.listenRequestId, state.promptRequestId) {
+                speech.mirrorAudio = state.settings.mirrorAudio
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
                         val korean = state.settings.mode == LearningMode.TRANSLATION && it.korean.isNotBlank()
@@ -82,7 +85,7 @@ class MainActivity : ComponentActivity() {
                             audioPermissions.launch(requiredPermissions.toTypedArray())
                         }
                     }
-                    LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE, LessonPhase.TIMED_OUT -> speech.stop()
+                    LessonPhase.RETRYING, LessonPhase.PAUSED, LessonPhase.COMPLETE, LessonPhase.IDLE, LessonPhase.TIMED_OUT -> speech.stop()
                     else -> Unit
                 }
             }
@@ -106,13 +109,14 @@ class MainActivity : ComponentActivity() {
                 state = state,
                 settingsOpen = settingsOpen,
                 datasetsOpen = datasetsOpen,
-                onSettingsOpen = { settingsOpen = true },
+                onSettingsOpen = { viewModel.pauseForBackground(); settingsOpen = true },
                 onSettingsClose = { settingsOpen = false },
                 onSettingsSave = { viewModel.updateSettings(it); settingsOpen = false },
-                onDatasetsOpen = { datasetsOpen = true },
+                onDatasetsOpen = { viewModel.pauseForBackground(); datasetsOpen = true },
                 onDatasetsClose = { datasetsOpen = false },
                 onDatasetSelect = { viewModel.selectDataset(it); datasetsOpen = false },
                 onDatasetDelete = viewModel::deleteDataset,
+                onDatasetSequence = { viewModel.selectDatasets(it); datasetsOpen = false },
                 onImport = { datasetsOpen = false; filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },
                 onPlayPause = viewModel::togglePause,
                 onRestart = viewModel::restart,
@@ -123,6 +127,23 @@ class MainActivity : ComponentActivity() {
                 onMessageDismiss = viewModel::clearMessage
             )
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode in setOf(KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER) &&
+            !hasOpenDialog) {
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) viewModel.next()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private var hasOpenDialog = false
+
+    override fun onStop() {
+        viewModel.pauseForBackground()
+        speech.stop()
+        super.onStop()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

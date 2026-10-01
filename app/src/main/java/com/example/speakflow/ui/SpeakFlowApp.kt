@@ -42,6 +42,7 @@ fun SpeakFlowApp(
     onDatasetsClose: () -> Unit,
     onDatasetSelect: (SavedDataset) -> Unit,
     onDatasetDelete: (SavedDataset) -> Unit,
+    onDatasetSequence: (List<String>) -> Unit,
     onImport: () -> Unit,
     onPlayPause: () -> Unit,
     onRestart: () -> Unit,
@@ -51,6 +52,7 @@ fun SpeakFlowApp(
     onRetry: () -> Unit,
     onMessageDismiss: () -> Unit
 ) {
+    var statisticsOpen by remember { mutableStateOf(false) }
     MaterialTheme(colorScheme = lightColorScheme(primary = Blue, background = Canvas, surface = Color.White)) {
         Scaffold(containerColor = Canvas, snackbarHost = {
             state.message?.let { message ->
@@ -74,8 +76,9 @@ fun SpeakFlowApp(
                 }
             }
         }
-        if (settingsOpen) SettingsSheet(state.settings, onSettingsClose, onSettingsSave)
-        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport)
+        if (settingsOpen) SettingsSheet(state.settings, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (statisticsOpen) StatisticsSheet(state.statistics) { statisticsOpen = false }
+        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence)
     }
 }
 
@@ -138,6 +141,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             LessonStatusHeader(state, statusColor)
+            Text("문장 ${state.position / state.settings.repeatCount + 1}/${state.items.size} · 반복 ${state.repeatNumber}/${state.settings.repeatCount}", fontSize = 12.sp, color = Blue)
             Text(state.microphoneLabel, color = Color(0xFF667085), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(12.dp))
             Column(
@@ -254,14 +258,20 @@ private fun DatasetSheet(
     onClose: () -> Unit,
     onSelect: (SavedDataset) -> Unit,
     onDelete: (SavedDataset) -> Unit,
-    onImport: () -> Unit
+    onImport: () -> Unit,
+    onSequence: (List<String>) -> Unit
 ) {
+    var selected by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingDelete by remember { mutableStateOf<SavedDataset?>(null) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
+        Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("내 데이터셋", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
             Text("저장된 파일을 선택하면 바로 학습할 수 있어요.", color = Color(0xFF667085), fontSize = 13.sp)
             Spacer(Modifier.height(16.dp))
+            Text("이어 학습할 파일을 체크하세요. 체크한 순서대로 이어집니다.", fontSize = 12.sp)
+            Button(onClick = { onSequence(selected) }, enabled = selected.isNotEmpty(), modifier = Modifier.fillMaxWidth()) {
+                Text("선택한 ${selected.size}개 데이터셋 이어 학습")
+            }
             state.savedDatasets.forEach { dataset ->
                 Surface(
                     onClick = { onSelect(dataset) },
@@ -270,7 +280,10 @@ private fun DatasetSheet(
                     color = if (dataset.id == state.activeDatasetId) Blue.copy(alpha = .10f) else Color(0xFFF5F7FA)
                 ) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(painterResource(R.drawable.ic_database), null, tint = Blue)
+                        Checkbox(checked = dataset.id in selected, onCheckedChange = { checked ->
+                            selected = if (checked) selected + dataset.id else selected - dataset.id
+                        })
+                        if (dataset.id in selected) Text("${selected.indexOf(dataset.id) + 1}", color = Blue)
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text(dataset.name, fontWeight = FontWeight.SemiBold, color = Ink)
@@ -312,7 +325,7 @@ private fun statusLabel(state: LearningUiState) = when (state.phase) {
         state.allWordsMatched -> "✓ 모두 인식"
         else -> "✓ Nice"
     }
-    LessonPhase.RETRYING -> "일부 단어를 다시 말해 보세요"
+    LessonPhase.RETRYING -> if (state.settings.autoAdvanceSentence) "20초 종료 · 다음으로 이동" else "20초 종료 · 다시 / 다음 선택"
     LessonPhase.TIMED_OUT -> "다음 문장으로 이동"
     LessonPhase.PAUSED -> "일시 정지"
     LessonPhase.COMPLETE -> "학습 완료"
@@ -364,7 +377,7 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave: (LearningSettings) -> Unit) {
+private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
     var draft by remember(current) { mutableStateOf(current) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
@@ -399,17 +412,31 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                 }
                 Text("선택한 음성이 없으면 같은 지역의 고품질 음성으로 재생됩니다.", color = Color.Gray, fontSize = 11.sp)
                 Spacer(Modifier.height(18.dp))
-                Text("음성 인식 후 동작", fontWeight = FontWeight.Bold)
-                Surface(color = Blue.copy(alpha = .08f), shape = RoundedCornerShape(14.dp)) {
-                    Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("✓ 모든 단어 일치: 알림음 후 다음 문장으로 자동 이동", fontSize = 13.sp)
-                        Text("• 일부 불일치: 알림음 없이 남은 시간 동안 계속 발음", fontSize = 13.sp)
-                        Text("일부가 다를 때 다음 문장 이동은 화면 버튼을 이용합니다.", color = Color.Gray, fontSize = 12.sp)
-                    }
+                Text("동일 문장 반복횟수", fontWeight = FontWeight.Bold)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    (1..5).forEach { count -> FilterChip(selected = draft.repeatCount == count,
+                        onClick = { draft = draft.copy(repeatCount = count) }, label = { Text("${count}회") }) }
                 }
+                Text("정답 또는 시간 종료 후 설정한 횟수만큼 반복합니다. 다음 버튼·Enter는 반복을 건너뜁니다.", color = Color.Gray, fontSize = 12.sp)
                 Spacer(Modifier.height(18.dp))
-                Text("발음 제한 시간: ${draft.timeoutSeconds}초", fontWeight = FontWeight.Bold)
-                Slider(value = draft.timeoutSeconds.toFloat(), onValueChange = { draft = draft.copy(timeoutSeconds = it.toInt()) }, valueRange = 5f..30f, steps = 24)
+                Text("다음 문장 전환", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = draft.autoAdvanceSentence, onClick = { draft = draft.copy(autoAdvanceSentence = true) })
+                    Text("자동: 정답 또는 20초 종료 시 이동", fontSize = 13.sp)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = !draft.autoAdvanceSentence, onClick = { draft = draft.copy(autoAdvanceSentence = false) })
+                    Text("수동: 정답은 자동, 오답은 다시/다음 선택", fontSize = 13.sp)
+                }
+                Text("제한시간 20초 · 정답일 때만 알림음", color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(18.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("scrcpy PC 미러링 오디오", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    Switch(checked = draft.mirrorAudio, onCheckedChange = { draft = draft.copy(mirrorAudio = it) })
+                }
+                Text("미러링 중 미디어 음량을 유지합니다. PC에서 scrcpy --audio-dup 으로 실행하면 휴대전화·PC에서 함께 들을 수 있습니다. 인식 서비스의 시작음이 들릴 수 있습니다.", color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(18.dp))
+                OutlinedButton(onClick = onStatistics, modifier = Modifier.fillMaxWidth()) { Text("학습량 · 학습시간 통계") }
                 Spacer(Modifier.height(12.dp))
             }
             Surface(shadowElevation = 10.dp, color = Color.White) {
