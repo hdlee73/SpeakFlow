@@ -12,9 +12,18 @@ android {
         applicationId = "com.example.speakflow"
         minSdk = 26
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.8.0"
+        versionCode = 26
+        versionName = "1.8.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    System.getenv("SPEAKFLOW_KEYSTORE_PATH")?.let { keyPath ->
+        signingConfigs.getByName("debug") {
+            storeFile = file(keyPath)
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildFeatures { compose = true }

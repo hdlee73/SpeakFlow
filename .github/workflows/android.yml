@@ -27,15 +27,25 @@ jobs:
             echo "Configure SPEAKFLOW_SIGNING_KEY_BASE64 in repository Actions secrets before publishing."
             exit 1
           fi
-          mkdir -p "$HOME/.android"
-          printf '%s' "$SPEAKFLOW_SIGNING_KEY" | base64 --decode > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-          keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -file /tmp/speakflow-cert.der
+          mkdir -p "$RUNNER_TEMP/speakflow-signing"
+          printf '%s' "$SPEAKFLOW_SIGNING_KEY" | base64 --decode > "$RUNNER_TEMP/speakflow-signing/fixed.p12"
+          chmod 600 "$RUNNER_TEMP/speakflow-signing/fixed.p12"
+          echo "SPEAKFLOW_KEYSTORE_PATH=$RUNNER_TEMP/speakflow-signing/fixed.p12" >> "$GITHUB_ENV"
+          keytool -exportcert -keystore "$RUNNER_TEMP/speakflow-signing/fixed.p12" -storepass android -alias androiddebugkey -file /tmp/speakflow-cert.der
           actual=$(sha256sum /tmp/speakflow-cert.der | cut -d ' ' -f 1)
           expected=$(tr -d '\r\n' < signing-certificate.sha256)
           test "$actual" = "$expected" || { echo "Signing certificate differs from the fixed release certificate."; exit 1; }
       - name: Test and build
-        run: ./gradlew testDebugUnitTest assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug --no-build-cache
+      - name: Verify built APK uses the fixed release certificate
+        if: github.ref == 'refs/heads/main'
+        run: |
+          signer=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -n 1)
+          test -n "$signer"
+          "$signer" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk > /tmp/speakflow-apk-certs.txt
+          actual=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/speakflow-apk-certs.txt | tr -d ' \r\n')
+          expected=$(tr -d '\r\n' < signing-certificate.sha256)
+          test "$actual" = "$expected" || { echo "Built APK has the wrong signing certificate; publication blocked."; exit 1; }
       - uses: actions/upload-artifact@v7
         with:
           name: SpeakFlow-debug-apk
