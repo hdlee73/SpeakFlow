@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
                 else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
             }
 
-            LaunchedEffect(state.phase, state.position, state.listenRequestId) {
+            LaunchedEffect(state.phase, state.position, state.listenRequestId, state.promptRequestId) {
                 speech.mirrorAudio = state.settings.mirrorAudio
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {

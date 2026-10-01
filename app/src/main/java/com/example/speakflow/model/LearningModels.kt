@@ -55,6 +55,7 @@ data class LearningUiState(
     val allWordsMatched: Boolean = false,
     val feedbackSequence: Long = 0L,
     val feedbackSuccess: Boolean? = null,
+    val promptRequestId: Long = 0L,
     val listenRequestId: Long = 0L,
     val microphoneLabel: String = "휴대전화 마이크",
     val remainingSeconds: Int = 0,

@@ -172,7 +172,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         attemptRecorded = false
         timerJob?.cancel()
         advanceJob?.cancel()
-        _state.update { it.copy(phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
+        _state.update { it.copy(phase = LessonPhase.SPEAKING, promptRequestId = it.promptRequestId + 1, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
     }
 
     fun onPromptFinished() {
@@ -387,7 +387,14 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 _state.update { it.copy(remainingSeconds = remaining) }
                 delay(250)
             }
-            if (_state.value.phase == LessonPhase.LISTENING) recordAttempt(false)
+            if (_state.value.phase == LessonPhase.LISTENING) {
+                val snapshot = _state.value
+                val liveMatches = SpeechScorer.matchedWords(snapshot.current?.english.orEmpty(), snapshot.liveText)
+                val complete = liveMatches.isNotEmpty() && liveMatches.indices.all {
+                    liveMatches[it] || snapshot.matchedWords.getOrElse(it) { false }
+                }
+                recordAttempt(complete)
+            }
             _state.update {
                 if (it.phase != LessonPhase.LISTENING) it else {
                     val recognized = it.liveText
@@ -396,17 +403,18 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                     val matchedWords = currentMatches.indices.map { index ->
                         it.matchedWords.getOrElse(index) { false } || currentMatches[index]
                     }
+                    val complete = matchedWords.isNotEmpty() && matchedWords.all { matched -> matched }
                     it.copy(
-                        phase = LessonPhase.RETRYING,
+                        phase = if (complete) LessonPhase.CORRECT else LessonPhase.RETRYING,
                         heardText = recognized,
-                        retryText = SpeechScorer.displayWords(expected)
+                        retryText = if (complete) null else SpeechScorer.displayWords(expected)
                             .filterIndexed { index, _ -> !matchedWords.getOrElse(index) { false } }
                             .joinToString(" ")
                             .ifBlank { expected },
                         matchedWords = matchedWords,
                         score = SpeechScorer.score(expected, recognized),
-                        allWordsMatched = false,
-                        feedbackSuccess = false,
+                        allWordsMatched = complete,
+                        feedbackSuccess = complete,
                         feedbackSequence = it.feedbackSequence + 1,
                         remainingSeconds = 0
                     )
