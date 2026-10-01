@@ -26,7 +26,7 @@ class LearningCheckpointStore(context: Context) {
             .put("order", JSONArray(checkpoint.order)).put("position", checkpoint.position)
             .put("repeat", checkpoint.repeatCount).put("play_order", checkpoint.playOrder.name)
             .put("completed", checkpoint.completed)
-        prefs.edit().putString("checkpoint", json.toString()).apply()
+        prefs.edit().putString("checkpoint", json.toString()).commit()
     }
 
     // Flush pending apply() writes before the activity leaves the foreground.

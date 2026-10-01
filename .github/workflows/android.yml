@@ -18,6 +18,22 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: gradle/actions/setup-gradle@v6
+      - name: Restore fixed signing key for installable releases
+        if: github.ref == 'refs/heads/main'
+        env:
+          SPEAKFLOW_SIGNING_KEY: ${{ secrets.SPEAKFLOW_SIGNING_KEY_BASE64 }}
+        run: |
+          if [ -z "$SPEAKFLOW_SIGNING_KEY" ]; then
+            echo "Configure SPEAKFLOW_SIGNING_KEY_BASE64 in repository Actions secrets before publishing."
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$SPEAKFLOW_SIGNING_KEY" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -file /tmp/speakflow-cert.der
+          actual=$(sha256sum /tmp/speakflow-cert.der | cut -d ' ' -f 1)
+          expected=$(tr -d '\r\n' < signing-certificate.sha256)
+          test "$actual" = "$expected" || { echo "Signing certificate differs from the fixed release certificate."; exit 1; }
       - name: Test and build
         run: ./gradlew testDebugUnitTest assembleDebug
       - uses: actions/upload-artifact@v7
@@ -36,9 +52,13 @@ jobs:
           cat > release-notes.md <<'EOF'
           ## 주요 개선 사항
 
-          - 앱 재실행 시 마지막 문장과 반복 회차 복원
-          - 무작위 학습 순서 및 여러 데이터셋의 이어 학습 순서 저장
-          - 학습 완료 상태 유지 및 음성 설정 변경 시 진행 위치 유지
+          - 부분 재발음 시 이미 맞힌 단어 유지 및 남은 단어만 평가
+          - 실제 설치 음성 선택·미리듣기 및 미국 남성 자동 선택 상태 표시
+          - 진행 위치 즉시 저장, 같은 데이터셋 재선택 시 진행 위치 유지
+          - 구동사 기본 데이터셋 200문장 추가
+          - 블루투스 워치 제외, 선택형 야외 잡음 보정 입력
+          - 앱 내 영어 문장·한국어 해석 편집
+          - 고정 서명키 검증으로 향후 APK 업데이트 지원
           EOF
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "$apk" --clobber

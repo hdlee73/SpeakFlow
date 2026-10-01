@@ -34,6 +34,9 @@ data class LearningSettings(
     val timeoutSeconds: Int = 20,
     val passScore: Int = 78,
     val mirrorAudio: Boolean = false,
+    val voiceId: String = "",
+    val outdoorAudio: Boolean = false,
+    val phoneMic: Boolean = false,
     val voiceAccent: VoiceAccent = VoiceAccent.US,
     val voiceGender: VoiceGender = VoiceGender.FEMALE
 )
@@ -47,6 +50,10 @@ data class LearningUiState(
     val datasetName: String? = null,
     val activeDatasetId: String? = null,
     val savedDatasets: List<SavedDataset> = emptyList(),
+    val voices: List<InstalledVoice> = emptyList(),
+    val voiceLabel: String = "",
+    val editingDataset: SavedDataset? = null,
+    val editingItems: List<SentencePair> = emptyList(),
     val heardText: String = "",
     val liveText: String = "",
     val retryText: String? = null,
@@ -69,3 +76,5 @@ data class LearningUiState(
 }
 
 data class DailyLearning(val date: String, val attempts: Int = 0, val correct: Int = 0, val seconds: Long = 0)
+
+data class InstalledVoice(val id: String, val label: String, val country: String, val gender: VoiceGender?)

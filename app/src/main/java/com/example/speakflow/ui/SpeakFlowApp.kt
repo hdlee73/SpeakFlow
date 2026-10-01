@@ -42,6 +42,11 @@ fun SpeakFlowApp(
     onDatasetsClose: () -> Unit,
     onDatasetSelect: (SavedDataset) -> Unit,
     onDatasetDelete: (SavedDataset) -> Unit,
+    onDatasetEdit: (SavedDataset) -> Unit,
+    onEditorClose: () -> Unit,
+    onSentenceSave: (Int, String, String) -> Unit,
+    onVoicePreview: (String) -> Unit,
+    onOpenUpdate: () -> Unit,
     onDatasetSequence: (List<String>) -> Unit,
     onImport: () -> Unit,
     onPlayPause: () -> Unit,
@@ -76,9 +81,10 @@ fun SpeakFlowApp(
                 }
             }
         }
-        if (settingsOpen) SettingsSheet(state.settings, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (settingsOpen) SettingsSheet(state.settings, state.voices, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (state.editingDataset != null) DatasetEditor(state.editingDataset, state.editingItems, onEditorClose, onSentenceSave)
         if (statisticsOpen) StatisticsSheet(state.statistics) { statisticsOpen = false }
-        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence)
+        if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence, onDatasetEdit)
     }
 }
 
@@ -143,6 +149,7 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
             LessonStatusHeader(state, statusColor)
             Text("문장 ${state.position / state.settings.repeatCount + 1}/${state.items.size} · 반복 ${state.repeatNumber}/${state.settings.repeatCount}", fontSize = 12.sp, color = Blue)
             Text(state.microphoneLabel, color = Color(0xFF667085), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            if (state.voiceLabel.isNotBlank()) Text(state.voiceLabel, fontSize = 10.sp, color = Color.Gray, maxLines = 2)
             Spacer(Modifier.height(12.dp))
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
@@ -165,6 +172,11 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                         Spacer(Modifier.height(8.dp))
                         Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
                     }
+                }
+                if (state.phase == LessonPhase.LISTENING && !state.retryText.isNullOrBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text("다시 말할 부분: ${state.retryText}", fontSize = 16.sp, color = Blue, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                    Text("이 부분만 다시 말해도 됩니다.", fontSize = 12.sp, color = Color.Gray)
                 }
                 state.score?.let {
                     if (state.heardText.isNotBlank()) {
@@ -259,7 +271,8 @@ private fun DatasetSheet(
     onSelect: (SavedDataset) -> Unit,
     onDelete: (SavedDataset) -> Unit,
     onImport: () -> Unit,
-    onSequence: (List<String>) -> Unit
+    onSequence: (List<String>) -> Unit,
+    onEdit: (SavedDataset) -> Unit
 ) {
     var selected by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingDelete by remember { mutableStateOf<SavedDataset?>(null) }
@@ -290,6 +303,7 @@ private fun DatasetSheet(
                             Text("${dataset.sentenceCount}개 문장", fontSize = 12.sp, color = Color(0xFF667085))
                         }
                         if (dataset.id == state.activeDatasetId) Text("학습 중", color = Blue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        TextButton(onClick = { onEdit(dataset) }, contentPadding = PaddingValues(horizontal = 4.dp)) { Text("편집") }
                         TextButton(
                             onClick = { pendingDelete = dataset },
                             colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFD92D20)),
@@ -377,7 +391,7 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
+private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
     var draft by remember(current) { mutableStateOf(current) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
@@ -401,16 +415,41 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                 Text("발음 지역", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     VoiceAccent.entries.forEach { accent ->
-                        FilterChip(selected = draft.voiceAccent == accent, onClick = { draft = draft.copy(voiceAccent = accent) }, label = { Text(accent.label) })
+                        FilterChip(selected = draft.voiceAccent == accent, onClick = { draft = draft.copy(voiceAccent = accent, voiceId = "") }, label = { Text(accent.label) })
                     }
                 }
                 Text("목소리", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     VoiceGender.entries.forEach { gender ->
-                        FilterChip(selected = draft.voiceGender == gender, onClick = { draft = draft.copy(voiceGender = gender) }, label = { Text(gender.label) })
+                        FilterChip(selected = draft.voiceGender == gender, onClick = { draft = draft.copy(voiceGender = gender, voiceId = "") }, label = { Text(gender.label) })
                     }
                 }
-                Text("선택한 음성이 없으면 같은 지역의 고품질 음성으로 재생됩니다.", color = Color.Gray, fontSize = 11.sp)
+                Text("엔진이 성별을 제공하지 않으면 남성·여성을 자동 확정할 수 없습니다. 미리듣기로 실제 음성을 선택하세요.", color = Color.Gray, fontSize = 12.sp)
+                var voicesOpen by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { voicesOpen = !voicesOpen }, modifier = Modifier.fillMaxWidth()) { Text("실제 음성 선택 · 미리듣기") }
+                if (voicesOpen) {
+                    TextButton(onClick = { draft = draft.copy(voiceId = "") }) { Text("자동 선택") }
+                    val country = if (draft.voiceAccent == VoiceAccent.US) "US" else "GB"
+                    val regional = voices.filter { it.country == country }
+                    if (regional.isEmpty()) Text("이 지역 음성이 설치되어 있지 않습니다.", color = Color.Gray)
+                    regional.forEach { voice ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = draft.voiceId == voice.id, onClick = { draft = draft.copy(voiceId = voice.id) })
+                            Text(voice.label, Modifier.weight(1f), fontSize = 11.sp)
+                            TextButton(onClick = { onPreview(voice.id) }) { Text("듣기") }
+                        }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("야외 잡음 보정 입력", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    Switch(checked = draft.outdoorAudio, onCheckedChange = { draft = draft.copy(outdoorAudio = it) })
+                }
+                Text("Android 13 이상에서 지원되는 음성 인식 엔진에 보정된 마이크 입력을 전달합니다. 지원되지 않으면 일반 입력으로 돌아갑니다. 바람 소리 제거 효과는 기기마다 다릅니다.", fontSize = 12.sp, color = Color.Gray)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("휴대전화 마이크 사용", Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                    Switch(checked = draft.phoneMic, onCheckedChange = { draft = draft.copy(phoneMic = it) })
+                }
+                Text("끄면 블루투스 이어셋을 우선 사용합니다. 워치는 마이크 대상으로 제외합니다.", fontSize = 12.sp, color = Color.Gray)
                 Spacer(Modifier.height(18.dp))
                 Text("동일 문장 반복횟수", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -437,6 +476,7 @@ private fun SettingsSheet(current: LearningSettings, onClose: () -> Unit, onSave
                 Text("미러링 중 미디어 음량을 유지합니다. PC에서 scrcpy --audio-dup 으로 실행하면 휴대전화·PC에서 함께 들을 수 있습니다. 인식 서비스의 시작음이 들릴 수 있습니다.", color = Color.Gray, fontSize = 12.sp)
                 Spacer(Modifier.height(18.dp))
                 OutlinedButton(onClick = onStatistics, modifier = Modifier.fillMaxWidth()) { Text("학습량 · 학습시간 통계") }
+                OutlinedButton(onClick = onOpenUpdate, modifier = Modifier.fillMaxWidth()) { Text("새 버전 확인 · 업데이트 받기") }
                 Spacer(Modifier.height(12.dp))
             }
             Surface(shadowElevation = 10.dp, color = Color.White) {

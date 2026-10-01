@@ -14,12 +14,32 @@ class DatasetStore(private val context: Context) {
     private val directory = File(context.filesDir, "datasets").apply { mkdirs() }
 
     fun ensureDefault() {
+        ensurePhrasalDefault()
         if (prefs.getBoolean("daily_500_installed", false)) return
         val file = File(directory, "daily_500.csv")
         context.assets.open("daily_500.csv").use { input -> file.outputStream().use(input::copyTo) }
         val count = file.inputStream().use { DatasetParser.parse(it, file.name) }.size
         saveIndex(list() + SavedDataset("daily_500", "생활 영어 패턴 500.csv", file.name, count))
         prefs.edit().putBoolean("daily_500_installed", true).apply()
+    }
+
+    private fun ensurePhrasalDefault() {
+        if (prefs.getBoolean("phrasal_200_installed", false)) return
+        val file = File(directory, "phrasal_200.csv")
+        context.assets.open("phrasal_200.csv").use { input -> file.outputStream().use(input::copyTo) }
+        val count = file.inputStream().use { DatasetParser.parse(it, file.name) }.size
+        saveIndex(list() + SavedDataset("phrasal_200", "실생활 구동사 200.csv", file.name, count))
+        prefs.edit().putBoolean("phrasal_200_installed", true).apply()
+    }
+
+    fun saveEdits(dataset: SavedDataset, items: List<SentencePair>) {
+        require(items.size == dataset.sentenceCount && items.all { it.english.isNotBlank() })
+        val json = JSONArray()
+        items.forEach { json.put(JSONObject().put("korean", it.korean).put("english", it.english)) }
+        val target = File(directory, "${dataset.id}.edited.json")
+        val temporary = File(directory, "${dataset.id}.edited.tmp")
+        temporary.writeText(json.toString(), Charsets.UTF_8)
+        check(temporary.renameTo(target)) { "수정 내용을 저장하지 못했습니다." }
     }
 
     fun list(): List<SavedDataset> = runCatching {
@@ -44,11 +64,18 @@ class DatasetStore(private val context: Context) {
         return saved to items
     }
 
-    fun load(dataset: SavedDataset): List<SentencePair> =
-        File(directory, dataset.fileName).inputStream().use { DatasetParser.parse(it, dataset.name) }
+    fun load(dataset: SavedDataset): List<SentencePair> {
+        val edited = File(directory, "${dataset.id}.edited.json")
+        if (edited.exists()) {
+            val json = JSONArray(edited.readText(Charsets.UTF_8))
+            return (0 until json.length()).map { i -> json.getJSONObject(i).let { SentencePair(it.getString("korean"), it.getString("english")) } }
+        }
+        return File(directory, dataset.fileName).inputStream().use { DatasetParser.parse(it, dataset.name) }
+    }
 
     fun delete(dataset: SavedDataset) {
         File(directory, dataset.fileName).delete()
+        File(directory, "${dataset.id}.edited.json").delete()
         saveIndex(list().filterNot { it.id == dataset.id })
     }
 
