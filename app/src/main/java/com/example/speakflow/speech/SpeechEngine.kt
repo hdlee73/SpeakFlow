@@ -60,6 +60,7 @@ class SpeechEngine(
     private var acceptingRecognitionResults = false
     private var recognitionStarting = false
     private var bluetoothRouteActive = false
+    private var communicationRouteActive = false
     private val streamsMutedForRecognition = mutableSetOf<Int>()
     private var pendingListen: Runnable? = null
     private var pendingReadyTimeout: Runnable? = null
@@ -148,6 +149,8 @@ class SpeechEngine(
     fun speak(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
         currentPromptId = null
         cancelPendingListen()
+        recognitionGeneration++
+        recognitionStarting = false
         acceptingRecognitionResults = false
         recognizer?.cancel()
         closeOutdoorInput()
@@ -334,7 +337,17 @@ class SpeechEngine(
     }
 
     private fun selectInputDevice(): Long {
-        if (phoneMic) { restoreAudioRoute(); onInputDeviceChanged("휴대전화 마이크"); return 0L }
+        if (bluetoothRouteActive && Build.VERSION.SDK_INT >= 31) {
+            val current = audioManager?.communicationDevice
+            if (!phoneMic && current != null && !isWatchDevice(current) && audioManager?.availableCommunicationDevices?.any { it.id == current.id } == true) return 0L
+            restoreAudioRoute()
+        }
+        if (phoneMic) {
+            restoreAudioRoute()
+            selectPhoneInput()
+            onInputDeviceChanged("휴대전화 마이크")
+            return 250L
+        }
         if (bluetoothRouteActive) return 0L
         onInputDeviceChanged("휴대전화 마이크")
         if (audioManager == null) return 0L
@@ -344,10 +357,11 @@ class SpeechEngine(
                 val bluetooth = audioManager.availableCommunicationDevices
                     .filter { (it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) && !isWatchDevice(it) }
                     .maxByOrNull { if (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) 2 else 1 }
-                    ?: return 0L
+                    ?: run { selectPhoneInput(); return 250L }
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
                 if (audioManager.setCommunicationDevice(bluetooth)) {
                     bluetoothRouteActive = true
+                    communicationRouteActive = true
                     onInputDeviceChanged("${bluetooth.productName} 마이크")
                     800L
                 } else {
@@ -373,6 +387,19 @@ class SpeechEngine(
         }
     }
 
+    private fun selectPhoneInput() {
+        if (audioManager == null || Build.VERSION.SDK_INT < 31) return
+        runCatching {
+            val phone = audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                ?: audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            if (phone != null) {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                communicationRouteActive = audioManager.setCommunicationDevice(phone)
+                if (!communicationRouteActive) audioManager.mode = AudioManager.MODE_NORMAL
+            }
+        }
+    }
+
     private fun isWatchDevice(device: AudioDeviceInfo): Boolean {
         val pairedClass = runCatching {
             appContext.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
@@ -384,7 +411,7 @@ class SpeechEngine(
     private fun closeOutdoorInput() { outdoorSource?.close(); outdoorSource = null }
 
     private fun restoreAudioRoute() {
-        if (audioManager == null || !bluetoothRouteActive) return
+        if (audioManager == null || (!bluetoothRouteActive && !communicationRouteActive)) return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
@@ -397,6 +424,7 @@ class SpeechEngine(
             audioManager.mode = AudioManager.MODE_NORMAL
         }
         bluetoothRouteActive = false
+        communicationRouteActive = false
     }
 
     private fun cancelPendingListen() {

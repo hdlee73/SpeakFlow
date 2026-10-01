@@ -122,7 +122,7 @@ class MainActivity : ComponentActivity() {
                 onDatasetsClose = { datasetsOpen = false },
                 onDatasetSelect = { viewModel.selectDataset(it); datasetsOpen = false },
                 onDatasetDelete = viewModel::deleteDataset,
-                onDatasetEdit = viewModel::editDataset,
+                onDatasetEdit = { datasetsOpen = false; viewModel.editDataset(it) },
                 onEditorClose = viewModel::closeEditor,
                 onSentenceSave = viewModel::saveSentence,
                 onVoicePreview = speech::previewVoice,

@@ -14,7 +14,9 @@ object RetryEvaluator {
             val whole = SpeechScorer.matchedWords(expected, text)
             val focused = SpeechScorer.matchedWords(target, text)
             val focusedByIndex = missing.zip(focused).toMap()
-            Result(text, words.indices.map { baseline[it] || whole.getOrElse(it) { false } || focusedByIndex[it] == true })
+            val wholeMatches = words.indices.map { baseline[it] || whole.getOrElse(it) { false } }
+            val focusedMatches = words.indices.map { baseline[it] || focusedByIndex[it] == true }
+            Result(text, if (focusedMatches.count { it } > wholeMatches.count { it }) focusedMatches else wholeMatches)
         }.maxWithOrNull(compareBy<Result> { it.matched.count { match -> match } }
             .thenBy { SpeechScorer.score(expected, it.text) }) ?: Result("", baseline)
     }

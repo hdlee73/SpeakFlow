@@ -7,6 +7,7 @@ class RetryEvaluatorTest {
     @Test fun shortCorrectionCompletesPreviouslyMatchedSentence() {
         val expected = "I'm expecting an annual salary of sixty million won."
         val first = RetryEvaluator.evaluate(expected, listOf("I'm expecting an annual salary of fifty million won"), emptyList())
+        assertFalse(first.matched.all { it })
         // Focus on the missing word regardless of the old whole-sentence score.
         val confirmed = SpeechScorer.displayWords(expected).map { it.trim('.', ',') != "sixty" }
         val corrected = RetryEvaluator.evaluate(expected, listOf("sixty"), confirmed)
@@ -16,6 +17,10 @@ class RetryEvaluatorTest {
     @Test fun repeatedWordCorrectionTargetsRemainingOccurrence() {
         val result = RetryEvaluator.evaluate("go and go", listOf("go"), listOf(true, true, false))
         assertTrue(result.matched.all { it })
+    }
+    @Test fun oneSpokenWordCannotFillTwoMissingOccurrences() {
+        val result = RetryEvaluator.evaluate("go and go", listOf("go"), listOf(false, true, false))
+        assertEquals(2, result.matched.count { it })
     }
     @Test fun emptyCallbackDoesNotEraseConfirmedWords() {
         val result = RetryEvaluator.evaluate("please call me", emptyList(), listOf(true, false, false))
