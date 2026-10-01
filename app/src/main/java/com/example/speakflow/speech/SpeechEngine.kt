@@ -42,6 +42,7 @@ class SpeechEngine(
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
+    var mirrorAudio: Boolean = false
     private var ttsReady = false
     private var acceptingRecognitionResults = false
     private var recognitionStarting = false
@@ -55,6 +56,7 @@ class SpeechEngine(
     private val recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
 
     init {
+        if (Build.VERSION.SDK_INT >= 29) audioManager?.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
         tts = TextToSpeech(context.applicationContext) { status ->
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) {
@@ -325,6 +327,7 @@ class SpeechEngine(
             AudioManager.STREAM_NOTIFICATION,
             AudioManager.STREAM_VOICE_CALL
         ).forEach { stream ->
+            if (mirrorAudio && stream in setOf(AudioManager.STREAM_MUSIC, AudioManager.STREAM_VOICE_CALL)) return@forEach
             if (stream !in streamsMutedForRecognition && !audioManager.isStreamMute(stream)) {
                 runCatching {
                     audioManager.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, 0)
@@ -343,7 +346,7 @@ class SpeechEngine(
     }
 
     fun playSuccessSound(onFinished: () -> Unit) {
-        restoreRecognitionAudio()
+        stop()
         runCatching {
             val attributes = AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
