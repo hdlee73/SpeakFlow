@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
 import java.io.File
 import android.os.SystemClock
 import com.example.speakflow.data.LearningStatsStore
+import com.example.speakflow.data.LearningCheckpointStore
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 class LearningViewModel(application: Application) : AndroidViewModel(application) {
     private companion object {
@@ -27,6 +31,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
     private val prefs = application.getSharedPreferences("learning", 0)
     private val datasetStore = DatasetStore(application)
+    private val checkpointStore = LearningCheckpointStore(application)
+    private var activeDatasetIds = emptyList<String>()
     private val statsStore = LearningStatsStore(application)
     private var attemptRecorded = false
     private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration(), savedDatasets = datasetStore.list(), statistics = statsStore.list()))
@@ -41,7 +47,30 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val datasets = datasetStore.list()
         _state.update { it.copy(savedDatasets = datasets) }
         val selectedId = prefs.getString("active_dataset_id", null)
-        (datasets.firstOrNull { it.id == selectedId } ?: migrated ?: datasets.firstOrNull())?.let(::selectDataset)
+        val checkpoint = checkpointStore.load()
+        val restored = checkpoint?.let { saved ->
+            runCatching {
+                val selected = saved.datasetIds.map { id -> datasets.first { it.id == id } }
+                val items = selected.flatMap { datasetStore.load(it) }
+                if (!saved.isValid(items.size, _state.value.settings)) return@runCatching false
+                activeDatasetIds = saved.datasetIds
+                _state.update { it.copy(items = items, order = saved.order, position = saved.position,
+                    datasetName = selected.joinToString(" → ") { dataset -> dataset.name },
+                    activeDatasetId = selected.singleOrNull()?.id ?: "playlist",
+                    phase = if (saved.completed) LessonPhase.COMPLETE else LessonPhase.PAUSED,
+                    message = if (saved.completed) "지난 학습을 완료했습니다. 처음부터 버튼으로 다시 시작할 수 있어요."
+                        else "마지막 학습 위치를 불러왔습니다. 재생 버튼을 누르면 이어집니다.") }
+                true
+            }.getOrDefault(false)
+        } ?: false
+        if (!restored) (datasets.firstOrNull { it.id == selectedId } ?: migrated ?: datasets.firstOrNull())?.let(::selectDataset)
+        viewModelScope.launch {
+            state.map { current ->
+                if (current.order.isEmpty() || activeDatasetIds.isEmpty()) null else LearningCheckpoint(
+                    activeDatasetIds, current.order, current.position, current.settings.repeatCount,
+                    current.settings.order, current.phase == LessonPhase.COMPLETE)
+            }.distinctUntilChanged().collect { checkpointStore.save(it) }
+        }
         viewModelScope.launch {
             var last = SystemClock.elapsedRealtime()
             var ticks = 0
@@ -68,7 +97,16 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         if (_state.value.phase !in setOf(LessonPhase.IDLE, LessonPhase.COMPLETE))
             _state.update { it.copy(phase = LessonPhase.PAUSED) }
+        saveCheckpointNow()
+        checkpointStore.flush()
         statsStore.save()
+    }
+
+    private fun saveCheckpointNow() {
+        val current = _state.value
+        checkpointStore.save(if (current.order.isEmpty() || activeDatasetIds.isEmpty()) null else LearningCheckpoint(
+            activeDatasetIds, current.order, current.position, current.settings.repeatCount,
+            current.settings.order, current.phase == LessonPhase.COMPLETE))
     }
 
     fun selectDatasets(ids: List<String>) {
@@ -77,7 +115,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             runCatching {
                 val selected = ids.mapNotNull { id -> datasetStore.list().firstOrNull { it.id == id } }
                 val items = selected.flatMap { datasetStore.load(it) }
-                resetWith(items, selected.joinToString(" → ") { it.name.removeSuffix(".csv").removeSuffix(".xlsx") }, "playlist")
+                resetWith(items, selected.joinToString(" → ") { it.name.removeSuffix(".csv").removeSuffix(".xlsx") }, "playlist", selected.map { it.id })
             }.onFailure { _state.update { state -> state.copy(message = "데이터셋을 불러오지 못했습니다: ${it.message}") } }
         }
     }
@@ -116,13 +154,15 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         advanceJob?.cancel()
         datasetStore.delete(dataset)
         val remaining = datasetStore.list()
-        if (_state.value.activeDatasetId == dataset.id) {
+        if (dataset.id in activeDatasetIds) {
             prefs.edit().remove("active_dataset_id").apply()
             val replacement = remaining.firstOrNull()
             if (replacement != null) {
                 _state.update { it.copy(savedDatasets = remaining, message = "데이터셋을 삭제했습니다.") }
                 selectDataset(replacement)
             } else {
+                activeDatasetIds = emptyList()
+                checkpointStore.save(null)
                 _state.update {
                     it.copy(
                         items = emptyList(), order = emptyList(), position = 0,
@@ -138,13 +178,15 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    private fun resetWith(items: List<SentencePair>, name: String, id: String) {
+    private fun resetWith(items: List<SentencePair>, name: String, id: String, ids: List<String> = listOf(id)) {
         timerJob?.cancel()
         advanceJob?.cancel()
         attemptRecorded = false
+        activeDatasetIds = ids
         val order = buildOrder(items.size, _state.value.settings.order)
         _state.update { it.copy(items = items, order = order, position = 0, phase = LessonPhase.IDLE, datasetName = name, activeDatasetId = id,
             heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0, message = null) }
+        saveCheckpointNow()
     }
 
     fun updateSettings(settings: LearningSettings) {
@@ -162,8 +204,11 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         advanceJob?.cancel()
         _state.update {
-            it.copy(settings = settings.copy(timeoutSeconds = 20), order = buildOrder(it.items.size, settings.order, settings.repeatCount), position = 0,
-                phase = LessonPhase.IDLE, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0)
+            val rebuild = settings.order != it.settings.order || settings.repeatCount != it.settings.repeatCount
+            it.copy(settings = settings.copy(timeoutSeconds = 20),
+                order = if (rebuild) buildOrder(it.items.size, settings.order, settings.repeatCount) else it.order,
+                position = if (rebuild) 0 else it.position,
+                phase = if (it.phase == LessonPhase.COMPLETE && !rebuild) LessonPhase.COMPLETE else LessonPhase.PAUSED, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0)
         }
     }
 
