@@ -18,6 +18,10 @@ enum class PlayOrder(val label: String) {
     SEQUENTIAL("순서대로"), RANDOM("무작위")
 }
 
+enum class VoiceAccent(val label: String) { US("미국"), UK("영국") }
+
+enum class VoiceGender(val label: String) { FEMALE("여성"), MALE("남성") }
+
 enum class LessonPhase {
     IDLE, SPEAKING, LISTENING, CORRECT, RETRYING, TIMED_OUT, PAUSED, COMPLETE
 }
@@ -28,7 +32,9 @@ data class LearningSettings(
     val repeatCount: Int = 1,
     val autoAdvanceSentence: Boolean = false,
     val timeoutSeconds: Int = 10,
-    val passScore: Int = 78
+    val passScore: Int = 78,
+    val voiceAccent: VoiceAccent = VoiceAccent.US,
+    val voiceGender: VoiceGender = VoiceGender.FEMALE
 )
 
 data class LearningUiState(

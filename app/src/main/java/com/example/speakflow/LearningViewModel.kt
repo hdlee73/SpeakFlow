@@ -112,6 +112,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putBoolean("auto_advance_sentence", settings.autoAdvanceSentence)
             .putInt("timeout", settings.timeoutSeconds)
             .putInt("pass_score", settings.passScore)
+            .putString("voice_accent", settings.voiceAccent.name)
+            .putString("voice_gender", settings.voiceGender.name)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -389,7 +391,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         repeatCount = prefs.getInt("repeat_count", 1).coerceIn(1, 5),
         autoAdvanceSentence = prefs.getBoolean("auto_advance_sentence", false),
         timeoutSeconds = prefs.getInt("timeout", 20),
-        passScore = prefs.getInt("pass_score", 65)
+        passScore = prefs.getInt("pass_score", 65),
+        voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
+        voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE)
         )
     }
 

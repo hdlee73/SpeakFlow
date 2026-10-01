@@ -56,7 +56,12 @@ class MainActivity : ComponentActivity() {
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
                         val korean = state.settings.mode == LearningMode.TRANSLATION && it.korean.isNotBlank()
-                        speech.speak(if (korean) it.korean else it.english, korean)
+                        speech.speak(
+                            text = if (korean) it.korean else it.english,
+                            korean = korean,
+                            accent = state.settings.voiceAccent,
+                            gender = state.settings.voiceGender
+                        )
                     }
                     LessonPhase.LISTENING -> {
                         val requiredPermissions = buildList {

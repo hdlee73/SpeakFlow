@@ -20,6 +20,8 @@ import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import androidx.core.content.ContextCompat
 import com.example.speakflow.R
+import com.example.speakflow.model.VoiceAccent
+import com.example.speakflow.model.VoiceGender
 import java.util.Locale
 
 class SpeechEngine(
@@ -31,6 +33,13 @@ class SpeechEngine(
     private val onUnavailable: (String) -> Unit,
     private val onInputDeviceChanged: (String) -> Unit
 ) {
+    private data class PendingPrompt(
+        val text: String,
+        val korean: Boolean,
+        val accent: VoiceAccent,
+        val gender: VoiceGender
+    )
+
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
     private var ttsReady = false
@@ -40,7 +49,7 @@ class SpeechEngine(
     private val streamsMutedForRecognition = mutableSetOf<Int>()
     private var pendingListen: Runnable? = null
     private var pendingReadyTimeout: Runnable? = null
-    private var pendingPrompt: Pair<String, Boolean>? = null
+    private var pendingPrompt: PendingPrompt? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var tts: TextToSpeech
     private val recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
@@ -56,9 +65,9 @@ class SpeechEngine(
                         .build()
                 )
                 tts.setPitch(1f)
-                pendingPrompt?.also { (text, korean) ->
+                pendingPrompt?.also { prompt ->
                     pendingPrompt = null
-                    speakNow(text, korean)
+                    speakNow(prompt.text, prompt.korean, prompt.accent, prompt.gender)
                 }
             } else {
                 pendingPrompt = null
@@ -116,27 +125,30 @@ class SpeechEngine(
         })
     }
 
-    fun speak(text: String, korean: Boolean) {
+    fun speak(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
         cancelPendingListen()
         acceptingRecognitionResults = false
         recognizer?.cancel()
         restoreRecognitionAudio()
         restoreAudioRoute()
         if (!ttsReady) {
-            pendingPrompt = text to korean
+            pendingPrompt = PendingPrompt(text, korean, accent, gender)
             return
         }
-        speakNow(text, korean)
+        speakNow(text, korean, accent, gender)
     }
 
-    private fun speakNow(text: String, korean: Boolean) {
-        val locale = if (korean) Locale.KOREA else Locale.US
+    private fun speakNow(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
+        val locale = if (korean) Locale.KOREA else when (accent) {
+            VoiceAccent.US -> Locale.US
+            VoiceAccent.UK -> Locale.UK
+        }
         val languageResult = tts.setLanguage(locale)
         if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
             onUnavailable(if (korean) "한국어 TTS 음성이 설치되어 있지 않습니다." else "영어 TTS 음성이 설치되어 있지 않습니다.")
             return
         }
-        selectNaturalVoice(locale)
+        selectNaturalVoice(locale, if (korean) null else gender)
         tts.setSpeechRate(if (korean) .90f else .84f)
         tts.setPitch(1f)
         val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
@@ -145,16 +157,32 @@ class SpeechEngine(
         }
     }
 
-    private fun selectNaturalVoice(locale: Locale) {
+    private fun selectNaturalVoice(locale: Locale, gender: VoiceGender?) {
         val voice = tts.voices.orEmpty()
             .filter { it.locale.language == locale.language }
             .maxWithOrNull(
                 compareBy<Voice> { it.locale.country == locale.country }
+                    .thenBy { voiceGenderScore(it, gender) }
                     .thenBy { it.quality }
                     .thenBy { if (it.isNetworkConnectionRequired) 1 else 0 }
                     .thenBy { -it.latency }
             )
         if (voice != null) runCatching { tts.voice = voice }
+    }
+
+    private fun voiceGenderScore(voice: Voice, requested: VoiceGender?): Int {
+        if (requested == null) return 0
+        val descriptor = buildString {
+            append(voice.name.lowercase(Locale.US))
+            append(' ')
+            append(voice.features.joinToString(" ").lowercase(Locale.US))
+        }
+        val female = listOf("female", "woman", "f01", "_f_", "-f-").any(descriptor::contains)
+        val male = !female && listOf("male", "man", "m01", "_m_", "-m-").any(descriptor::contains)
+        return when (requested) {
+            VoiceGender.FEMALE -> if (female) 2 else if (male) -1 else 0
+            VoiceGender.MALE -> if (male) 2 else if (female) -1 else 0
+        }
     }
 
     private fun naturalizeForSpeech(text: String, korean: Boolean): String {
