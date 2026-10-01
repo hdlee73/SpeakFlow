@@ -36,6 +36,8 @@ class MainActivity : ComponentActivity() {
             onPartialResult = viewModel::onPartialRecognition,
             onResult = viewModel::onRecognition,
             onUnavailable = viewModel::onRecognitionUnavailable,
+            onVoicesChanged = viewModel::onVoicesChanged,
+            onVoiceChanged = viewModel::onVoiceChanged,
             onInputDeviceChanged = viewModel::onMicrophoneChanged
         )
         setContent {
@@ -43,7 +45,7 @@ class MainActivity : ComponentActivity() {
             var settingsOpen by rememberSaveable { mutableStateOf(false) }
             var datasetsOpen by rememberSaveable { mutableStateOf(false) }
             var bluetoothPermissionRequested by rememberSaveable { mutableStateOf(false) }
-            SideEffect { hasOpenDialog = settingsOpen || datasetsOpen }
+            SideEffect { hasOpenDialog = settingsOpen || datasetsOpen || state.editingDataset != null }
             val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                 uri?.let(viewModel::importDataset)
             }
@@ -56,6 +58,10 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(state.phase, state.position, state.listenRequestId, state.promptRequestId) {
                 speech.mirrorAudio = state.settings.mirrorAudio
+                speech.voiceId = state.settings.voiceId
+                speech.phoneMic = state.settings.phoneMic
+                speech.outdoorAudio = state.settings.outdoorAudio
+                speech.recognitionLanguage = if (state.settings.voiceAccent == com.example.speakflow.model.VoiceAccent.UK) "en-GB" else "en-US"
                 when (state.phase) {
                     LessonPhase.SPEAKING -> state.current?.let {
                         val korean = state.settings.mode == LearningMode.TRANSLATION && it.korean.isNotBlank()
@@ -79,7 +85,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         if (requiredPermissions.isEmpty()) {
-                            speech.listen(state.current?.english.orEmpty())
+                            speech.listen(com.example.speakflow.speech.RetryEvaluator.remaining(state.current?.english.orEmpty(), state.matchedWords))
                         } else {
                             if (Manifest.permission.BLUETOOTH_CONNECT in requiredPermissions) bluetoothPermissionRequested = true
                             audioPermissions.launch(requiredPermissions.toTypedArray())
@@ -116,6 +122,11 @@ class MainActivity : ComponentActivity() {
                 onDatasetsClose = { datasetsOpen = false },
                 onDatasetSelect = { viewModel.selectDataset(it); datasetsOpen = false },
                 onDatasetDelete = viewModel::deleteDataset,
+                onDatasetEdit = { datasetsOpen = false; viewModel.editDataset(it) },
+                onEditorClose = viewModel::closeEditor,
+                onSentenceSave = viewModel::saveSentence,
+                onVoicePreview = speech::previewVoice,
+                onOpenUpdate = { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/hdlee73/SpeakFlow/releases/latest"))) },
                 onDatasetSequence = { viewModel.selectDatasets(it); datasetsOpen = false },
                 onImport = { datasetsOpen = false; filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },
                 onPlayPause = viewModel::togglePause,
@@ -139,6 +150,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private var hasOpenDialog = false
+
+    override fun onPause() {
+        viewModel.saveProgress()
+        super.onPause()
+    }
 
     override fun onStop() {
         viewModel.pauseForBackground()

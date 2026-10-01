@@ -10,6 +10,7 @@ import com.example.speakflow.data.DatasetParser
 import com.example.speakflow.data.DatasetStore
 import com.example.speakflow.model.*
 import com.example.speakflow.speech.SpeechScorer
+import com.example.speakflow.speech.RetryEvaluator
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -102,6 +103,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         statsStore.save()
     }
 
+    fun saveProgress() = saveCheckpointNow()
+
     private fun saveCheckpointNow() {
         val current = _state.value
         checkpointStore.save(if (current.order.isEmpty() || activeDatasetIds.isEmpty()) null else LearningCheckpoint(
@@ -139,6 +142,10 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectDataset(dataset: SavedDataset) {
+        if (_state.value.activeDatasetId == dataset.id && _state.value.items.isNotEmpty()) {
+            pauseForBackground()
+            return
+        }
         viewModelScope.launch {
             runCatching { datasetStore.load(dataset) }
                 .onSuccess {
@@ -147,6 +154,30 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 }
                 .onFailure { _state.update { state -> state.copy(message = "저장된 데이터셋을 다시 불러오지 못했습니다.") } }
         }
+    }
+
+    fun onVoicesChanged(voices: List<InstalledVoice>) = _state.update { it.copy(voices = voices) }
+    fun onVoiceChanged(label: String) = _state.update { it.copy(voiceLabel = label) }
+
+    fun editDataset(dataset: SavedDataset) {
+        pauseForBackground()
+        runCatching { datasetStore.load(dataset) }
+            .onSuccess { rows -> _state.update { it.copy(editingDataset = dataset, editingItems = rows) } }
+            .onFailure { _state.update { state -> state.copy(message = it.message) } }
+    }
+    fun closeEditor() = _state.update { it.copy(editingDataset = null, editingItems = emptyList()) }
+    fun saveSentence(index: Int, korean: String, english: String) {
+        val state = _state.value
+        val dataset = state.editingDataset ?: return
+        if (english.isBlank() || index !in state.editingItems.indices) return
+        runCatching {
+            val rows = state.editingItems.toMutableList().apply { this[index] = SentencePair(korean.trim(), english.trim()) }
+            datasetStore.saveEdits(dataset, rows)
+            val activeItems = if (dataset.id in activeDatasetIds) activeDatasetIds.flatMap { id -> datasetStore.load(datasetStore.list().first { it.id == id }) } else state.items
+            _state.update { it.copy(editingItems = rows, items = activeItems, phase = LessonPhase.PAUSED,
+                heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), message = "문장을 저장했습니다.") }
+            saveCheckpointNow()
+        }.onFailure { _state.update { state -> state.copy(message = it.message ?: "문장을 저장하지 못했습니다.") } }
     }
 
     fun deleteDataset(dataset: SavedDataset) {
@@ -200,6 +231,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putInt("pass_score", settings.passScore)
             .putString("voice_accent", settings.voiceAccent.name)
             .putString("voice_gender", settings.voiceGender.name)
+            .putString("voice_id", settings.voiceId)
+            .putBoolean("outdoor_audio", settings.outdoorAudio)
+            .putBoolean("phone_mic", settings.phoneMic)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -210,6 +244,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 position = if (rebuild) 0 else it.position,
                 phase = if (it.phase == LessonPhase.COMPLETE && !rebuild) LessonPhase.COMPLETE else LessonPhase.PAUSED, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, remainingSeconds = 0)
         }
+        saveCheckpointNow()
     }
 
     fun startSpeaking() {
@@ -218,6 +253,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         advanceJob?.cancel()
         _state.update { it.copy(phase = LessonPhase.SPEAKING, promptRequestId = it.promptRequestId + 1, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, message = null) }
+        saveCheckpointNow()
     }
 
     fun onPromptFinished() {
@@ -246,20 +282,10 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val expected = _state.value.current?.english ?: return
         val remaining = if (deadline == 0L) _state.value.settings.timeoutSeconds
             else ((deadline - SystemClock.elapsedRealtime() + 999) / 1_000).toInt().coerceAtLeast(0)
-        val recognized = candidates.filter(String::isNotBlank)
-        val previous = _state.value.heardText
-        val stitched = previous.takeIf(String::isNotBlank)?.let {
-            recognized.map { "$previous $it" }
-        }.orEmpty()
-        val best = (recognized + stitched + listOf(previous).filter(String::isNotBlank)).distinct()
-            .map { it to SpeechScorer.score(expected, it) }
-            .maxByOrNull { it.second }
-        val text = best?.first.orEmpty()
-        val score = best?.second ?: 0
-        val currentMatches = SpeechScorer.matchedWords(expected, text)
-        val matchedWords = currentMatches.indices.map { index ->
-            _state.value.matchedWords.getOrElse(index) { false } || currentMatches[index]
-        }
+        val result = RetryEvaluator.evaluate(expected, candidates, _state.value.matchedWords)
+        val text = result.text.ifBlank { _state.value.heardText }
+        val matchedWords = result.matched
+        val score = if (matchedWords.all { it }) 100 else matchedWords.count { it } * 100 / matchedWords.size.coerceAtLeast(1)
         val allWordsMatched = matchedWords.isNotEmpty() && matchedWords.all { it }
         if (allWordsMatched) {
             recordAttempt(true)
@@ -286,6 +312,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 matchedWords = matchedWords,
                 score = score,
                 allWordsMatched = false,
+                retryText = RetryEvaluator.remaining(expected, matchedWords).takeIf { matchedWords.any { it } },
                 remainingSeconds = remaining,
                 listenRequestId = it.listenRequestId + 1
             ) }
@@ -312,13 +339,13 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
 
     fun onPartialRecognition(candidates: List<String>) {
         if (_state.value.phase != LessonPhase.LISTENING) return
-        // The first hypothesis is the recognizer's current best result. Avoid scoring
-        // every alternative on each partial callback so the UI can repaint immediately.
         val latest = candidates.firstOrNull(String::isNotBlank).orEmpty()
-        if (latest.isNotBlank()) {
-            val combined = listOf(_state.value.heardText, latest).filter(String::isNotBlank).joinToString(" ")
-            if (combined != _state.value.liveText) _state.update { it.copy(liveText = combined) }
-        }
+        if (latest.isBlank()) return
+        val expected = _state.value.current?.english ?: return
+        val preview = RetryEvaluator.evaluate(expected, listOf(latest), _state.value.matchedWords)
+        if (preview.matched.isNotEmpty() && preview.matched.all { it }) {
+            onRecognition(listOf(latest))
+        } else _state.update { it.copy(liveText = latest) }
     }
 
     fun retryListening() {
@@ -381,6 +408,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timerJob?.cancel()
         advanceJob?.cancel()
         _state.update { it.copy(position = ((it.position / it.settings.repeatCount - 1) * it.settings.repeatCount).coerceAtLeast(0), phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null) }
+        saveCheckpointNow()
     }
 
     private fun advanceRepetition() {
@@ -391,6 +419,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             else it.copy(position = it.position + 1, phase = LessonPhase.SPEAKING, heardText = "", liveText = "",
                 retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
+        saveCheckpointNow()
     }
 
     fun next() {
@@ -408,6 +437,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             else state.copy(position = nextPosition, phase = LessonPhase.SPEAKING, heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null,
                 allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
+        saveCheckpointNow()
     }
 
     fun restart() {
@@ -419,6 +449,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             else it.copy(order = buildOrder(it.items.size, it.settings.order), position = 0, phase = LessonPhase.SPEAKING,
                 heardText = "", liveText = "", retryText = null, matchedWords = emptyList(), score = null, allWordsMatched = false, feedbackSuccess = null, remainingSeconds = 0)
         }
+        saveCheckpointNow()
     }
 
     fun clearMessage() = _state.update { it.copy(message = null) }
@@ -434,7 +465,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             }
             if (_state.value.phase == LessonPhase.LISTENING) {
                 val snapshot = _state.value
-                val liveMatches = SpeechScorer.matchedWords(snapshot.current?.english.orEmpty(), snapshot.liveText)
+                val liveMatches = RetryEvaluator.evaluate(snapshot.current?.english.orEmpty(), listOf(snapshot.liveText), snapshot.matchedWords).matched
                 val complete = liveMatches.isNotEmpty() && liveMatches.indices.all {
                     liveMatches[it] || snapshot.matchedWords.getOrElse(it) { false }
                 }
@@ -444,10 +475,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 if (it.phase != LessonPhase.LISTENING) it else {
                     val recognized = it.liveText
                     val expected = it.current?.english.orEmpty()
-                    val currentMatches = SpeechScorer.matchedWords(expected, recognized)
-                    val matchedWords = currentMatches.indices.map { index ->
-                        it.matchedWords.getOrElse(index) { false } || currentMatches[index]
-                    }
+                    val matchedWords = RetryEvaluator.evaluate(expected, listOf(recognized), it.matchedWords).matched
                     val complete = matchedWords.isNotEmpty() && matchedWords.all { matched -> matched }
                     it.copy(
                         phase = if (complete) LessonPhase.CORRECT else LessonPhase.RETRYING,
@@ -487,6 +515,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timeoutSeconds = 20,
         mirrorAudio = prefs.getBoolean("mirror_audio", false),
         passScore = prefs.getInt("pass_score", 65),
+        voiceId = prefs.getString("voice_id", "") ?: "",
+        outdoorAudio = prefs.getBoolean("outdoor_audio", false),
+        phoneMic = prefs.getBoolean("phone_mic", false),
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
         voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE)
         )

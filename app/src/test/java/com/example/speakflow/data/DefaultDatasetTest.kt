@@ -11,4 +11,10 @@ class DefaultDatasetTest {
         assertEquals(500, pairs.map { it.english }.distinct().size)
         assertTrue(pairs.all { it.korean.any { c -> c in '\uAC00'..'\uD7A3' } && it.english.isNotBlank() })
     }
+    @Test fun phrasalDatasetContains200UniqueBilingualSentences() {
+        val pairs = File("src/main/assets/phrasal_200.csv").inputStream().use { DatasetParser.parseCsv(it) }
+        assertEquals(200, pairs.size)
+        assertEquals(200, pairs.map { it.english }.distinct().size)
+        assertTrue(pairs.all { it.korean.isNotBlank() })
+    }
 }

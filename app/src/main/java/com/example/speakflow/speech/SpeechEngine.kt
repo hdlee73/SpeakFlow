@@ -23,6 +23,8 @@ import com.example.speakflow.R
 import com.example.speakflow.model.VoiceAccent
 import com.example.speakflow.model.VoiceGender
 import java.util.Locale
+import android.bluetooth.BluetoothManager
+import com.example.speakflow.model.InstalledVoice
 
 class SpeechEngine(
     context: Context,
@@ -31,6 +33,8 @@ class SpeechEngine(
     private val onPartialResult: (List<String>) -> Unit,
     private val onResult: (List<String>) -> Unit,
     private val onUnavailable: (String) -> Unit,
+    private val onVoicesChanged: (List<InstalledVoice>) -> Unit,
+    private val onVoiceChanged: (String) -> Unit,
     private val onInputDeviceChanged: (String) -> Unit
 ) {
     private data class PendingPrompt(
@@ -43,19 +47,27 @@ class SpeechEngine(
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
     var mirrorAudio: Boolean = false
+    var voiceId: String = ""
+    var outdoorAudio: Boolean = false
+    var phoneMic: Boolean = false
+    var recognitionLanguage: String = "en-US"
+    private var injectionFailed = false
+    private var outdoorSource: OutdoorAudioSource? = null
+    private var recognitionGeneration = 0L
     private var promptVersion = 0L
     private var currentPromptId: String? = null
     private var ttsReady = false
     private var acceptingRecognitionResults = false
     private var recognitionStarting = false
     private var bluetoothRouteActive = false
+    private var communicationRouteActive = false
     private val streamsMutedForRecognition = mutableSetOf<Int>()
     private var pendingListen: Runnable? = null
     private var pendingReadyTimeout: Runnable? = null
     private var pendingPrompt: PendingPrompt? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var tts: TextToSpeech
-    private val recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
+    private var recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
 
     init {
         if (Build.VERSION.SDK_INT >= 29) audioManager?.setAllowedCapturePolicy(AudioAttributes.ALLOW_CAPTURE_BY_ALL)
@@ -69,6 +81,7 @@ class SpeechEngine(
                         .build()
                 )
                 tts.setPitch(1f)
+                publishVoices()
                 pendingPrompt?.also { prompt ->
                     pendingPrompt = null
                     speakNow(prompt.text, prompt.korean, prompt.accent, prompt.gender)
@@ -90,23 +103,28 @@ class SpeechEngine(
                 mainHandler.post { if (utteranceId != null && utteranceId == currentPromptId) onUnavailable("예문 음성을 재생하지 못했습니다. 휴대전화의 미디어 음량과 TTS 설정을 확인해 주세요.") }
             }
         })
-        recognizer?.setRecognitionListener(object : RecognitionListener {
+    }
+
+    private fun listener(generation: Long) = object : RecognitionListener {
             override fun onResults(results: Bundle) {
-                if (!acceptingRecognitionResults) return
+                if (generation != recognitionGeneration || !acceptingRecognitionResults) return
                 acceptingRecognitionResults = false
                 recognitionStarting = false
+                closeOutdoorInput()
                 val matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 onResult(matches.orEmpty())
             }
             override fun onError(error: Int) {
-                if (!acceptingRecognitionResults) return
+                if (generation != recognitionGeneration || (!acceptingRecognitionResults && !recognitionStarting)) return
                 acceptingRecognitionResults = false
                 recognitionStarting = false
+                if (outdoorSource != null) injectionFailed = true
+                closeOutdoorInput()
                 if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) onUnavailable("마이크 권한이 필요합니다.")
                 else onResult(emptyList())
             }
             override fun onReadyForSpeech(params: Bundle?) {
-                if (!recognitionStarting) return
+                if (generation != recognitionGeneration || !recognitionStarting) return
                 pendingReadyTimeout?.let(mainHandler::removeCallbacks)
                 pendingReadyTimeout = null
                 recognitionStarting = false
@@ -118,22 +136,24 @@ class SpeechEngine(
             override fun onBufferReceived(buffer: ByteArray?) = Unit
             override fun onEndOfSpeech() = Unit
             override fun onPartialResults(partialResults: Bundle?) {
-                if (!acceptingRecognitionResults) return
+                if (generation != recognitionGeneration || !acceptingRecognitionResults) return
                 onPartialResult(partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
             }
             override fun onSegmentResults(segmentResults: Bundle) {
-                if (!acceptingRecognitionResults) return
+                if (generation != recognitionGeneration || !acceptingRecognitionResults) return
                 onPartialResult(segmentResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty())
             }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
     }
 
     fun speak(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
         currentPromptId = null
         cancelPendingListen()
+        recognitionGeneration++
+        recognitionStarting = false
         acceptingRecognitionResults = false
         recognizer?.cancel()
+        closeOutdoorInput()
         restoreRecognitionAudio()
         restoreAudioRoute()
         if (!ttsReady) {
@@ -163,17 +183,45 @@ class SpeechEngine(
         }
     }
 
+    private fun knownGender(voice: Voice): VoiceGender? = when {
+        voiceGenderScore(voice, VoiceGender.FEMALE) == 2 -> VoiceGender.FEMALE
+        voiceGenderScore(voice, VoiceGender.MALE) == 2 -> VoiceGender.MALE
+        else -> null
+    }
+
+    private fun publishVoices() {
+        val installed = tts.voices.orEmpty().filter { it.locale.language == "en" }
+            .sortedWith(compareBy<Voice> { it.locale.country }.thenBy { it.name })
+            .map { voice -> InstalledVoice(voice.name,
+                "${voice.locale.country} · ${knownGender(voice)?.label ?: "성별 미제공"} · ${voice.name}",
+                voice.locale.country, knownGender(voice)) }
+        mainHandler.post { onVoicesChanged(installed) }
+    }
+
+    fun previewVoice(id: String) {
+        if (!ttsReady) return
+        stop()
+        val voice = tts.voices.orEmpty().firstOrNull { it.name == id } ?: return
+        tts.voice = voice
+        tts.setSpeechRate(.84f)
+        tts.speak("Could you help me figure this out? I would appreciate your advice.", TextToSpeech.QUEUE_FLUSH, null, "preview")
+    }
+
     private fun selectNaturalVoice(locale: Locale, gender: VoiceGender?) {
-        val voice = tts.voices.orEmpty()
-            .filter { it.locale.language == locale.language }
-            .maxWithOrNull(
-                compareBy<Voice> { it.locale.country == locale.country }
-                    .thenBy { voiceGenderScore(it, gender) }
-                    .thenBy { it.quality }
-                    .thenBy { if (it.isNetworkConnectionRequired) 1 else 0 }
-                    .thenBy { -it.latency }
-            )
+        val regional = tts.voices.orEmpty().filter { it.locale.language == locale.language && it.locale.country == locale.country }
+        val direct = regional.firstOrNull { it.name == voiceId && locale.language == "en" }
+        val voice = direct ?: regional.maxWithOrNull(compareBy<Voice> { voiceGenderScore(it, gender) }
+            .thenBy { it.quality }.thenBy { -it.latency })
         if (voice != null) runCatching { tts.voice = voice }
+        if (locale.language == "en") {
+            val label = when {
+                voice == null -> "선택 지역의 음성이 없습니다. TTS 엔진 설정을 확인하세요."
+                direct != null -> "직접 선택: ${voice.name}"
+                knownGender(voice) == gender -> "${locale.country} ${gender?.label}: ${voice.name}"
+                else -> "성별을 확인할 수 없어 미리듣기로 선택해 주세요: ${voice.name}"
+            }
+            mainHandler.post { onVoiceChanged(label) }
+        }
     }
 
     private fun voiceGenderScore(voice: Voice, requested: VoiceGender?): Int {
@@ -204,20 +252,28 @@ class SpeechEngine(
     }
 
     fun listen(expectedText: String) {
-        val speechRecognizer = recognizer
-            ?: run { onUnavailable("이 기기에서 음성 인식을 사용할 수 없습니다."); return }
+        if (!SpeechRecognizer.isRecognitionAvailable(appContext)) { onUnavailable("이 기기에서 음성 인식을 사용할 수 없습니다."); return }
+        cancelPendingListen()
+        acceptingRecognitionResults = false
+        recognitionStarting = false
+        recognitionGeneration++
+        recognizer?.destroy()
+        closeOutdoorInput()
+        val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(appContext)
+        recognizer = speechRecognizer
+        speechRecognizer.setRecognitionListener(listener(recognitionGeneration))
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "en-US")
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLanguage)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionLanguage)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 8)
             val expectedWords = expectedText.trim().split(Regex("\\s+")).filter(String::isNotBlank)
             val minimumLength = (expectedWords.size * 300L).coerceIn(1_500L, 7_000L)
             putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, minimumLength)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2_600L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_600L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3_000L)
+            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1_800L)
             if (Build.VERSION.SDK_INT >= 33) {
                 val normalizedWords = expectedWords.map { it.trim('.', ',', '!', '?', ';', ':', '"', '\'', '’') }
                     .filter { it.length >= 3 }
@@ -244,11 +300,30 @@ class SpeechEngine(
             pendingListen = null
             acceptingRecognitionResults = false
             recognitionStarting = true
+            if (outdoorAudio && !injectionFailed && Build.VERSION.SDK_INT >= 33) {
+                val source = OutdoorAudioSource()
+                runCatching {
+                    val routed = if (Build.VERSION.SDK_INT >= 31) audioManager?.communicationDevice else null
+                    val inputs = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
+                    val device = if (bluetoothRouteActive) inputs.firstOrNull { it.address == routed?.address && it.type in setOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET) }
+                        else inputs.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                    if (bluetoothRouteActive) check(device != null)
+                    source.attach(intent, device)
+                    outdoorSource = source
+                    onInputDeviceChanged("${device?.productName ?: "휴대전화"} 마이크 · ${if (source.noiseSuppressed) "야외 잡음 보정" else "야외 입력"}")
+                }.onFailure {
+                    source.close()
+                    injectionFailed = true
+                    intent.removeExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE)
+                }
+            }
             runCatching { speechRecognizer.startListening(intent) }.onSuccess {
                 pendingReadyTimeout = Runnable {
                     pendingReadyTimeout = null
                     if (recognitionStarting) {
                         recognitionStarting = false
+                        if (outdoorSource != null) injectionFailed = true
+                        closeOutdoorInput()
                         onResult(emptyList())
                     }
                 }.also { mainHandler.postDelayed(it, 5_000L) }
@@ -262,6 +337,17 @@ class SpeechEngine(
     }
 
     private fun selectInputDevice(): Long {
+        if (bluetoothRouteActive && Build.VERSION.SDK_INT >= 31) {
+            val current = audioManager?.communicationDevice
+            if (!phoneMic && current != null && !isWatchDevice(current) && audioManager?.availableCommunicationDevices?.any { it.id == current.id } == true) return 0L
+            restoreAudioRoute()
+        }
+        if (phoneMic) {
+            restoreAudioRoute()
+            selectPhoneInput()
+            onInputDeviceChanged("휴대전화 마이크")
+            return 250L
+        }
         if (bluetoothRouteActive) return 0L
         onInputDeviceChanged("휴대전화 마이크")
         if (audioManager == null) return 0L
@@ -269,12 +355,13 @@ class SpeechEngine(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return 0L
                 val bluetooth = audioManager.availableCommunicationDevices
-                    .filter { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+                    .filter { (it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) && !isWatchDevice(it) }
                     .maxByOrNull { if (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) 2 else 1 }
-                    ?: return 0L
+                    ?: run { selectPhoneInput(); return 250L }
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
                 if (audioManager.setCommunicationDevice(bluetooth)) {
                     bluetoothRouteActive = true
+                    communicationRouteActive = true
                     onInputDeviceChanged("${bluetooth.productName} 마이크")
                     800L
                 } else {
@@ -283,7 +370,7 @@ class SpeechEngine(
                 }
             } else {
                 val bluetooth = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO } ?: return 0L
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO && !isWatchDevice(it) } ?: return 0L
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
                 @Suppress("DEPRECATION")
                 audioManager.startBluetoothSco()
@@ -300,8 +387,31 @@ class SpeechEngine(
         }
     }
 
+    private fun selectPhoneInput() {
+        if (audioManager == null || Build.VERSION.SDK_INT < 31) return
+        runCatching {
+            val phone = audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+                ?: audioManager.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            if (phone != null) {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+                communicationRouteActive = audioManager.setCommunicationDevice(phone)
+                if (!communicationRouteActive) audioManager.mode = AudioManager.MODE_NORMAL
+            }
+        }
+    }
+
+    private fun isWatchDevice(device: AudioDeviceInfo): Boolean {
+        val pairedClass = runCatching {
+            appContext.getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices
+                ?.firstOrNull { it.address == device.address }?.bluetoothClass?.deviceClass
+        }.getOrNull()
+        return BluetoothInputPolicy.isWatch(device.productName.toString(), pairedClass)
+    }
+
+    private fun closeOutdoorInput() { outdoorSource?.close(); outdoorSource = null }
+
     private fun restoreAudioRoute() {
-        if (audioManager == null || !bluetoothRouteActive) return
+        if (audioManager == null || (!bluetoothRouteActive && !communicationRouteActive)) return
         runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 audioManager.clearCommunicationDevice()
@@ -314,6 +424,7 @@ class SpeechEngine(
             audioManager.mode = AudioManager.MODE_NORMAL
         }
         bluetoothRouteActive = false
+        communicationRouteActive = false
     }
 
     private fun cancelPendingListen() {
@@ -372,6 +483,6 @@ class SpeechEngine(
         }.onFailure { mainHandler.post(onFinished) }
     }
 
-    fun stop() { currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
-    fun destroy() { currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
+    fun stop() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
+    fun destroy() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
 }
