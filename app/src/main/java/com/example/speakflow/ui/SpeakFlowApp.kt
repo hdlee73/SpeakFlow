@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.sp
 import com.example.speakflow.model.*
 import com.example.speakflow.R
 import com.example.speakflow.speech.SpeechScorer
+import kotlinx.coroutines.delay
 
 private val Blue = Color(0xFF285BE6)
 private val Mint = Color(0xFF43C6A4)
@@ -56,6 +57,7 @@ fun SpeakFlowApp(
     onNext: () -> Unit,
     onReplay: () -> Unit,
     onRetry: () -> Unit,
+    onToggleRecording: () -> Unit,
     onMessageDismiss: () -> Unit
 ) {
     var statisticsOpen by remember { mutableStateOf(false) }
@@ -78,6 +80,7 @@ fun SpeakFlowApp(
                         if (state.items.isEmpty()) EmptyState(onImport)
                         else LessonCard(state, expanded, onReplay, onRestart, onRetry, onNext)
                     }
+                    RecordingBar(state.recordingStartedAt, onToggleRecording)
                     PlayerControls(state, onPrevious, onPlayPause, onNext)
                 }
             }
@@ -366,6 +369,29 @@ private fun adaptiveTextSize(length: Int, expanded: Boolean) = when {
 }
 
 @Composable
+private fun RecordingBar(startedAt: Long?, onToggle: () -> Unit) {
+    var seconds by remember { mutableStateOf(0L) }
+    LaunchedEffect(startedAt) {
+        while (startedAt != null) {
+            seconds = (android.os.SystemClock.elapsedRealtime() - startedAt) / 1000
+            delay(1000)
+        }
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center) {
+        if (startedAt != null) {
+            Button(
+                onClick = onToggle, shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Miss)
+            ) { Text("■  녹음 종료 · %d:%02d".format(seconds / 60, seconds % 60), fontWeight = FontWeight.Bold) }
+        } else {
+            OutlinedButton(onClick = onToggle, shape = RoundedCornerShape(14.dp)) {
+                Text("●  녹음 시작", color = Miss, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
 private fun PlayerControls(state: LearningUiState, onPrevious: () -> Unit, onPlayPause: () -> Unit, onNext: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp, top = 8.dp),
@@ -484,12 +510,6 @@ private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice
                     }
                 }
                 if (bluetoothDevices.isEmpty()) Text("연결된 블루투스 오디오 기기를 찾지 못했습니다. 블루투스 권한을 허용하지 않았다면 처음 학습을 시작할 때 허용해 주세요.", fontSize = 12.sp, color = Color.Gray)
-                Spacer(Modifier.height(18.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("내 발음 녹음 저장", Modifier.weight(1f), fontWeight = FontWeight.Bold)
-                    Switch(checked = draft.recordPronunciation, onCheckedChange = { draft = draft.copy(recordPronunciation = it) })
-                }
-                Text("말한 소리를 문장마다 WAV 파일로 저장합니다. 내려받기 폴더의 SpeakFlow 폴더에서 확인할 수 있고, 파일 이름은 날짜·문장 번호·정답(ok)/재시도(retry)·문장으로 만들어져요. 앞뒤 무음은 잘라 저장합니다. Android 13 이상에서, 음성 인식 엔진이 지원할 때 동작합니다.", fontSize = 12.sp, color = Color.Gray)
                 Spacer(Modifier.height(18.dp))
                 Text("동일 문장 반복횟수", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

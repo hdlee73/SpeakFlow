@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
             onVoiceChanged = viewModel::onVoiceChanged,
             onBluetoothDevicesChanged = viewModel::onBluetoothDevicesChanged,
             onNotice = viewModel::showMessage,
+            recordingTee = viewModel::onAudioChunk,
+            isRecording = viewModel::isRecording,
             onInputDeviceChanged = viewModel::onMicrophoneChanged
         )
         setContent {
@@ -58,32 +60,11 @@ class MainActivity : ComponentActivity() {
                 else viewModel.onRecognitionUnavailable("마이크 권한이 거부되었습니다.")
             }
 
-            var previousPhase by remember { mutableStateOf(state.phase) }
-            LaunchedEffect(state.phase) {
-                val before = previousPhase
-                previousPhase = state.phase
-                speech.recordPronunciation = state.settings.recordPronunciation
-                if (!state.settings.recordPronunciation) { speech.discardRecording(); return@LaunchedEffect }
-                when (state.phase) {
-                    LessonPhase.LISTENING -> if (before != LessonPhase.LISTENING) speech.beginRecording()
-                    LessonPhase.CORRECT, LessonPhase.RETRYING -> if (before == LessonPhase.LISTENING) {
-                        speech.finishRecording(
-                            sentenceNumber = state.position / state.settings.repeatCount.coerceAtLeast(1) + 1,
-                            success = state.phase == LessonPhase.CORRECT,
-                            english = state.current?.english.orEmpty()
-                        )
-                    }
-                    else -> if (before == LessonPhase.LISTENING) speech.discardRecording()
-                }
-                Unit
-            }
-
             LaunchedEffect(state.phase, state.position, state.listenRequestId, state.promptRequestId) {
                 speech.mirrorAudio = state.settings.mirrorAudio
                 speech.voiceId = state.settings.voiceId
                 speech.phoneMic = state.settings.phoneMic
                 speech.bluetoothInputAddress = state.settings.bluetoothInputAddress
-                speech.recordPronunciation = state.settings.recordPronunciation
                 speech.outdoorAudio = state.settings.outdoorAudio
                 speech.biasTowardExpected = state.settings.strictness != com.example.speakflow.model.RecognitionStrictness.STRICT
                 speech.recognitionLanguage = if (state.settings.voiceAccent == com.example.speakflow.model.VoiceAccent.UK) "en-GB" else "en-US"
@@ -164,6 +145,7 @@ class MainActivity : ComponentActivity() {
                 onNext = viewModel::next,
                 onReplay = viewModel::startSpeaking,
                 onRetry = viewModel::retryListening,
+                onToggleRecording = viewModel::toggleRecording,
                 onMessageDismiss = viewModel::clearMessage
             )
         }
