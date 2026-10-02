@@ -52,4 +52,12 @@ class StrictnessTest {
         val whole = RetryEvaluator.evaluate(sentence, listOf("my missing keys turned up in my jacket pocket"), confirmed, RecognitionStrictness.STRICT)
         assertTrue(whole.matched.all { it })
     }
+
+    @Test fun wrongUtteranceNeverRemovesConfirmedWords() {
+        val confirmed = listOf(false, false, false, false, false, false, false, false, true)
+        listOf(RecognitionStrictness.NORMAL, RecognitionStrictness.EASY).forEach { level ->
+            val result = RetryEvaluator.evaluate(sentence, listOf("front of plate", "banana"), confirmed, level)
+            assertTrue(result.matched.last())
+        }
+    }
 }
