@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
             onUnavailable = viewModel::onRecognitionUnavailable,
             onVoicesChanged = viewModel::onVoicesChanged,
             onVoiceChanged = viewModel::onVoiceChanged,
+            onBluetoothDevicesChanged = viewModel::onBluetoothDevicesChanged,
             onInputDeviceChanged = viewModel::onMicrophoneChanged
         )
         setContent {
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 speech.mirrorAudio = state.settings.mirrorAudio
                 speech.voiceId = state.settings.voiceId
                 speech.phoneMic = state.settings.phoneMic
+                speech.bluetoothInputAddress = state.settings.bluetoothInputAddress
                 speech.outdoorAudio = state.settings.outdoorAudio
                 speech.biasTowardExpected = state.settings.strictness != com.example.speakflow.model.RecognitionStrictness.STRICT
                 speech.recognitionLanguage = if (state.settings.voiceAccent == com.example.speakflow.model.VoiceAccent.UK) "en-GB" else "en-US"
@@ -120,7 +122,7 @@ class MainActivity : ComponentActivity() {
                 state = state,
                 settingsOpen = settingsOpen,
                 datasetsOpen = datasetsOpen,
-                onSettingsOpen = { viewModel.pauseForBackground(); settingsOpen = true },
+                onSettingsOpen = { viewModel.pauseForBackground(); speech.refreshBluetoothDevices(); settingsOpen = true },
                 onSettingsClose = { settingsOpen = false },
                 onSettingsSave = { viewModel.updateSettings(it); settingsOpen = false },
                 onDatasetsOpen = { viewModel.pauseForBackground(); datasetsOpen = true },

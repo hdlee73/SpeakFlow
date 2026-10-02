@@ -20,6 +20,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
 import androidx.core.content.ContextCompat
 import com.example.speakflow.R
+import com.example.speakflow.model.BluetoothChoice
 import com.example.speakflow.model.VoiceAccent
 import com.example.speakflow.model.VoiceGender
 import java.util.Locale
@@ -35,6 +36,7 @@ class SpeechEngine(
     private val onUnavailable: (String) -> Unit,
     private val onVoicesChanged: (List<InstalledVoice>) -> Unit,
     private val onVoiceChanged: (String) -> Unit,
+    private val onBluetoothDevicesChanged: (List<BluetoothChoice>) -> Unit,
     private val onInputDeviceChanged: (String) -> Unit
 ) {
     private data class PendingPrompt(
@@ -50,6 +52,8 @@ class SpeechEngine(
     var voiceId: String = ""
     var outdoorAudio: Boolean = false
     var phoneMic: Boolean = false
+    /** Empty = automatic. Otherwise the address of the headset chosen in settings. */
+    var bluetoothInputAddress: String = ""
     /**
      * Biasing strings nudge the recognizer toward the expected sentence. This is what
      * keeps recognition usable with a noisy or narrow-band (Bluetooth) microphone,
@@ -347,7 +351,8 @@ class SpeechEngine(
     private fun selectInputDevice(): Long {
         if (bluetoothRouteActive && Build.VERSION.SDK_INT >= 31) {
             val current = audioManager?.communicationDevice
-            if (!phoneMic && current != null && !isWatchDevice(current) && audioManager?.availableCommunicationDevices?.any { it.id == current.id } == true) return 0L
+            val wanted = audioManager?.availableCommunicationDevices?.let { preferredBluetooth(it, current) }
+            if (!phoneMic && current != null && wanted != null && current.id == wanted.id) return 0L
             restoreAudioRoute()
         }
         if (phoneMic) {
@@ -362,9 +367,7 @@ class SpeechEngine(
         return runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) return 0L
-                val bluetooth = audioManager.availableCommunicationDevices
-                    .filter { (it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) && !isWatchDevice(it) }
-                    .maxByOrNull { if (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) 2 else 1 }
+                val bluetooth = preferredBluetooth(audioManager.availableCommunicationDevices, null)
                     ?: run { selectPhoneInput(); return 250L }
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
                 if (audioManager.setCommunicationDevice(bluetooth)) {
@@ -377,8 +380,8 @@ class SpeechEngine(
                     0L
                 }
             } else {
-                val bluetooth = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
-                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO && !isWatchDevice(it) } ?: return 0L
+                val bluetooth = preferredBluetooth(audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList(), null)
+                    ?: return 0L
                 audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
                 @Suppress("DEPRECATION")
                 audioManager.startBluetoothSco()
@@ -406,6 +409,51 @@ class SpeechEngine(
                 if (!communicationRouteActive) audioManager.mode = AudioManager.MODE_NORMAL
             }
         }
+    }
+
+    /**
+     * Which Bluetooth headset to record from. Order: the one picked in settings, the one
+     * the media sound is currently playing through (so a second paired device such as a
+     * car kit or speaker is not grabbed), the one already in use, then BLE over SCO.
+     */
+    private fun preferredBluetooth(devices: List<AudioDeviceInfo>, current: AudioDeviceInfo?): AudioDeviceInfo? {
+        val headsets = devices.filter { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+        if (bluetoothInputAddress.isNotBlank()) headsets.firstOrNull { it.address == bluetoothInputAddress }?.let { return it }
+        val usable = headsets.filter { !isWatchDevice(it) }
+        val playing = activeMediaOutputAddress()
+        if (!playing.isNullOrBlank()) usable.firstOrNull { it.address == playing }?.let { return it }
+        if (current != null) usable.firstOrNull { it.id == current.id }?.let { return it }
+        return usable.maxByOrNull { if (it.type == AudioDeviceInfo.TYPE_BLE_HEADSET) 2 else 1 }
+    }
+
+    private fun activeMediaOutputAddress(): String? {
+        if (Build.VERSION.SDK_INT < 33) return null
+        return runCatching {
+            val attributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            audioManager?.getAudioDevicesForAttributes(attributes)
+                ?.firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                        it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+                }?.address
+        }.getOrNull()
+    }
+
+    fun refreshBluetoothDevices() {
+        val audio = audioManager ?: return
+        val permitted = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        val choices = if (!permitted) emptyList() else runCatching {
+            val all = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) audio.availableCommunicationDevices
+                else audio.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
+            all.filter { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET }
+                .filter { it.address.isNotBlank() }
+                .distinctBy { it.address }
+                .map { BluetoothChoice(it.address, it.productName.toString(), isWatchDevice(it)) }
+        }.getOrDefault(emptyList())
+        mainHandler.post { onBluetoothDevicesChanged(choices) }
     }
 
     private fun isWatchDevice(device: AudioDeviceInfo): Boolean {

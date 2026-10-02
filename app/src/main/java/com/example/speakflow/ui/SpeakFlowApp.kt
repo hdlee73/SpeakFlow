@@ -82,7 +82,7 @@ fun SpeakFlowApp(
                 }
             }
         }
-        if (settingsOpen) SettingsSheet(state.settings, state.voices, state.voiceLabel, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (settingsOpen) SettingsSheet(state.settings, state.voices, state.bluetoothDevices, state.voiceLabel, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
         if (state.editingDataset != null) DatasetEditor(state.editingDataset, state.editingItems, onEditorClose, onSentenceSave)
         if (statisticsOpen) StatisticsSheet(state.statistics) { statisticsOpen = false }
         if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence, onDatasetEdit)
@@ -403,7 +403,7 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, voiceLabel: String, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
+private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, bluetoothDevices: List<BluetoothChoice>, voiceLabel: String, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
     var draft by remember(current) { mutableStateOf(current) }
     ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
@@ -471,6 +471,19 @@ private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice
                     Switch(checked = draft.phoneMic, onCheckedChange = { draft = draft.copy(phoneMic = it) })
                 }
                 Text("끄면 블루투스 이어셋을 우선 사용합니다. 워치는 마이크 대상으로 제외합니다.", fontSize = 12.sp, color = Color.Gray)
+                Spacer(Modifier.height(10.dp))
+                Text("블루투스 마이크 기기", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = draft.bluetoothInputAddress.isBlank(), onClick = { draft = draft.copy(bluetoothInputAddress = "") })
+                    Text("자동 · 지금 소리가 나오는 이어셋 우선", fontSize = 13.sp)
+                }
+                bluetoothDevices.forEach { device ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = draft.bluetoothInputAddress == device.address, onClick = { draft = draft.copy(bluetoothInputAddress = device.address) })
+                        Text(device.name + if (device.watch) " (워치)" else "", fontSize = 13.sp)
+                    }
+                }
+                if (bluetoothDevices.isEmpty()) Text("연결된 블루투스 오디오 기기를 찾지 못했습니다. 블루투스 권한을 허용하지 않았다면 처음 학습을 시작할 때 허용해 주세요.", fontSize = 12.sp, color = Color.Gray)
                 Spacer(Modifier.height(18.dp))
                 Text("동일 문장 반복횟수", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {

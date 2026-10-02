@@ -157,6 +157,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onVoicesChanged(voices: List<InstalledVoice>) = _state.update { it.copy(voices = voices) }
+    fun onBluetoothDevicesChanged(devices: List<BluetoothChoice>) = _state.update { it.copy(bluetoothDevices = devices) }
     fun onVoiceChanged(label: String) = _state.update { it.copy(voiceLabel = label) }
 
     fun editDataset(dataset: SavedDataset) {
@@ -235,6 +236,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putBoolean("outdoor_audio", settings.outdoorAudio)
             .putBoolean("phone_mic", settings.phoneMic)
             .putString("strictness", settings.strictness.name)
+            .putString("bluetooth_input", settings.bluetoothInputAddress)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -350,10 +352,14 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         val preview = RetryEvaluator.evaluate(expected, listOf(latest), _state.value.matchedWords, _state.value.settings.strictness)
         if (preview.matched.isNotEmpty() && preview.matched.all { it }) {
             onRecognition(listOf(latest))
-        } else if (_state.value.settings.strictness == RecognitionStrictness.STRICT) {
-            // Each utterance is judged on its own: replace, don't accumulate.
+        } else {
+            // NORMAL/EASY: a word the recognizer already produced exactly stays confirmed
+            // (preview.matched always includes the confirmed ones). Otherwise it turns blue
+            // while speaking and back to grey when a later hypothesis, a no-match error or
+            // the next recognizer session replaces the live text.
+            // STRICT: each utterance stands alone, so preview.matched only covers this one.
             _state.update { it.copy(liveText = latest, matchedWords = preview.matched) }
-        } else _state.update { it.copy(liveText = latest) }
+        }
     }
 
     fun retryListening() {
@@ -536,7 +542,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         phoneMic = prefs.getBoolean("phone_mic", false),
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
         voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE),
-        strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL)
+        strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL),
+        bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: ""
         )
     }
 

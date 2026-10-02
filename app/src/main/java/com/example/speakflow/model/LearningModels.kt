@@ -1,5 +1,7 @@
 package com.example.speakflow.model
 
+data class BluetoothChoice(val address: String, val name: String, val watch: Boolean)
+
 data class SentencePair(val korean: String, val english: String)
 
 data class SavedDataset(
@@ -45,7 +47,9 @@ data class LearningSettings(
     val phoneMic: Boolean = false,
     val voiceAccent: VoiceAccent = VoiceAccent.US,
     val voiceGender: VoiceGender = VoiceGender.FEMALE,
-    val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL
+    val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL,
+    /** Empty = automatic: the headset that is currently playing the sound. */
+    val bluetoothInputAddress: String = ""
 )
 
 data class LearningUiState(
@@ -58,6 +62,7 @@ data class LearningUiState(
     val activeDatasetId: String? = null,
     val savedDatasets: List<SavedDataset> = emptyList(),
     val voices: List<InstalledVoice> = emptyList(),
+    val bluetoothDevices: List<BluetoothChoice> = emptyList(),
     val voiceLabel: String = "",
     val editingDataset: SavedDataset? = null,
     val editingItems: List<SentencePair> = emptyList(),
