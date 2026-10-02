@@ -40,10 +40,11 @@ class WavAudioTest {
         assertEquals(WavAudio.SAMPLE_RATE, sampleRate)
     }
 
-    @Test fun fileNameSortsByTimeAndDescribesTheAttempt() {
-        assertEquals("20261002-111530_007_ok_he-turned-up-late-without-letting-anyone.wav",
-            WavAudio.fileName("20261002-111530", 7, true, "He turned up late without letting anyone know."))
-        assertEquals("20261002-111530_012_retry.wav", WavAudio.fileName("20261002-111530", 12, false, "???"))
-        assertTrue(WavAudio.fileName("t", 1, true, "a/b\\c: d").matches(Regex("t_001_ok_[a-z0-9-]+\\.wav")))
+    @Test fun headerMatchesWavLengthAndSessionNameIsTimestamped() {
+        assertEquals(44, WavAudio.header(1000).size)
+        assertEquals("SpeakFlow_20261002-111530.wav", WavAudio.sessionFileName("20261002-111530"))
+        assertEquals("SpeakFlow_20261002-111530_recovered.wav", WavAudio.sessionFileName("20261002-111530", true))
+        assertEquals("1:05", WavAudio.duration(65L * WavAudio.SAMPLE_RATE * 2))
+        assertEquals(19_200, WavAudio.GAP_BYTES)
     }
 }

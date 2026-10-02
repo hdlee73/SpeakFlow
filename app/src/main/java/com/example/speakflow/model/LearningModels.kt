@@ -49,8 +49,7 @@ data class LearningSettings(
     val voiceGender: VoiceGender = VoiceGender.FEMALE,
     val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL,
     /** Empty = automatic: the headset that is currently playing the sound. */
-    val bluetoothInputAddress: String = "",
-    val recordPronunciation: Boolean = false
+    val bluetoothInputAddress: String = ""
 )
 
 data class LearningUiState(
@@ -64,6 +63,8 @@ data class LearningUiState(
     val savedDatasets: List<SavedDataset> = emptyList(),
     val voices: List<InstalledVoice> = emptyList(),
     val bluetoothDevices: List<BluetoothChoice> = emptyList(),
+    /** SystemClock.elapsedRealtime() when the recording was started; null = not recording. */
+    val recordingStartedAt: Long? = null,
     val voiceLabel: String = "",
     val editingDataset: SavedDataset? = null,
     val editingItems: List<SentencePair> = emptyList(),

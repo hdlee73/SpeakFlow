@@ -11,15 +11,20 @@ import kotlin.math.sqrt
 object WavAudio {
     const val SAMPLE_RATE = 16_000
 
-    fun toWav(pcm: ByteArray, sampleRate: Int = SAMPLE_RATE): ByteArray {
+    fun header(dataSize: Int, sampleRate: Int = SAMPLE_RATE): ByteArray {
         val ascii = Charsets.US_ASCII
-        return ByteBuffer.allocate(44 + pcm.size).order(ByteOrder.LITTLE_ENDIAN)
-            .put("RIFF".toByteArray(ascii)).putInt(36 + pcm.size).put("WAVE".toByteArray(ascii))
+        return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            .put("RIFF".toByteArray(ascii)).putInt(36 + dataSize).put("WAVE".toByteArray(ascii))
             .put("fmt ".toByteArray(ascii)).putInt(16).putShort(1.toShort()).putShort(1.toShort())
             .putInt(sampleRate).putInt(sampleRate * 2).putShort(2.toShort()).putShort(16.toShort())
-            .put("data".toByteArray(ascii)).putInt(pcm.size).put(pcm)
+            .put("data".toByteArray(ascii)).putInt(dataSize)
             .array()
     }
+
+    fun toWav(pcm: ByteArray, sampleRate: Int = SAMPLE_RATE): ByteArray = header(pcm.size, sampleRate) + pcm
+
+    /** Silence inserted between two attempts so they are easy to tell apart when played back. */
+    const val GAP_BYTES = SAMPLE_RATE * 2 * 6 / 10
 
     /**
      * Cuts the waiting time before and after speech (a timed-out attempt is 20 seconds of
@@ -48,10 +53,12 @@ object WavAudio {
         return pcm.copyOfRange(from * frameSize * 2, to * frameSize * 2)
     }
 
-    /** e.g. 20261002-111530_007_ok_he-turned-up-late-without-letting-anyone.wav */
-    fun fileName(timestamp: String, number: Int, success: Boolean, english: String): String {
-        val slug = english.lowercase(Locale.US).replace(Regex("[^a-z0-9]+"), "-").trim('-').take(40).trim('-')
-        return String.format(Locale.US, "%s_%03d_%s%s.wav", timestamp, number, if (success) "ok" else "retry",
-            if (slug.isEmpty()) "" else "_$slug")
+    /** e.g. SpeakFlow_20261002-111530.wav (the time the recording was started) */
+    fun sessionFileName(timestamp: String, recovered: Boolean = false): String =
+        "SpeakFlow_$timestamp${if (recovered) "_recovered" else ""}.wav"
+
+    fun duration(pcmBytes: Long): String {
+        val seconds = pcmBytes / (SAMPLE_RATE * 2)
+        return String.format(Locale.US, "%d:%02d", seconds / 60, seconds % 60)
     }
 }

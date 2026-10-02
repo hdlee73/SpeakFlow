@@ -25,10 +25,6 @@ import com.example.speakflow.model.VoiceAccent
 import com.example.speakflow.model.VoiceGender
 import java.util.Locale
 import android.bluetooth.BluetoothManager
-import java.io.ByteArrayOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import kotlin.concurrent.thread
 import com.example.speakflow.model.InstalledVoice
 
 class SpeechEngine(
@@ -42,6 +38,9 @@ class SpeechEngine(
     private val onVoiceChanged: (String) -> Unit,
     private val onBluetoothDevicesChanged: (List<BluetoothChoice>) -> Unit,
     private val onNotice: (String) -> Unit,
+    /** Every chunk of the app-owned microphone input, for the recording button. */
+    private val recordingTee: (ByteArray, Int) -> Unit,
+    private val isRecording: () -> Boolean,
     private val onInputDeviceChanged: (String) -> Unit
 ) {
     private data class PendingPrompt(
@@ -57,12 +56,6 @@ class SpeechEngine(
     var voiceId: String = ""
     var outdoorAudio: Boolean = false
     private var recordingNoticeShown = false
-    /** Saves what the user says. Uses the same app-owned microphone input as [outdoorAudio]. */
-    var recordPronunciation: Boolean = false
-        set(value) { if (!value) recordingNoticeShown = false; field = value }
-    private val recordingLock = Any()
-    private val recording = ByteArrayOutputStream()
-    private val saver = PronunciationSaver(context.applicationContext)
     var phoneMic: Boolean = false
     /** Empty = automatic. Otherwise the address of the headset chosen in settings. */
     var bluetoothInputAddress: String = ""
@@ -324,8 +317,10 @@ class SpeechEngine(
             pendingListen = null
             acceptingRecognitionResults = false
             recognitionStarting = true
-            if ((outdoorAudio || recordPronunciation) && !injectionFailed && Build.VERSION.SDK_INT >= 33) {
-                val source = OutdoorAudioSource(if (recordPronunciation) ::appendRecording else null)
+            val recordingWanted = isRecording()
+            if (!recordingWanted) recordingNoticeShown = false
+            if ((outdoorAudio || recordingWanted) && !injectionFailed && Build.VERSION.SDK_INT >= 33) {
+                val source = OutdoorAudioSource(recordingTee)
                 runCatching {
                     val routed = if (Build.VERSION.SDK_INT >= 31) audioManager?.communicationDevice else null
                     val inputs = audioManager?.getDevices(AudioManager.GET_DEVICES_INPUTS).orEmpty()
@@ -335,7 +330,7 @@ class SpeechEngine(
                     source.attach(intent, device)
                     outdoorSource = source
                     onInputDeviceChanged("${device?.productName ?: "휴대전화"} 마이크 · " + when {
-                        !outdoorAudio -> "녹음 중"
+                        !outdoorAudio -> "녹음 입력"
                         source.noiseSuppressed -> "야외 잡음 보정"
                         else -> "야외 입력"
                     })
@@ -345,7 +340,7 @@ class SpeechEngine(
                     intent.removeExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE)
                 }
             }
-            if (recordPronunciation && outdoorSource == null && !recordingNoticeShown) {
+            if (recordingWanted && outdoorSource == null && !recordingNoticeShown) {
                 recordingNoticeShown = true
                 onNotice("이 기기의 음성 인식에서는 녹음을 사용할 수 없어 녹음 없이 진행합니다.")
             }
@@ -366,31 +361,6 @@ class SpeechEngine(
                 onUnavailable("마이크를 시작하지 못했습니다. 오디오 권한과 블루투스 연결을 확인해 주세요.")
             }
         }.also { mainHandler.postDelayed(it, routeDelay) }
-    }
-
-    private fun appendRecording(buffer: ByteArray, count: Int) {
-        synchronized(recordingLock) {
-            if (recording.size() < MAX_RECORDING_BYTES) recording.write(buffer, 0, count)
-        }
-    }
-
-    fun beginRecording() = synchronized(recordingLock) { recording.reset() }
-
-    fun discardRecording() = synchronized(recordingLock) { recording.reset() }
-
-    /** Trims the silence and writes one .wav for this attempt to Download/SpeakFlow. */
-    fun finishRecording(sentenceNumber: Int, success: Boolean, english: String) {
-        val pcm = synchronized(recordingLock) { recording.toByteArray().also { recording.reset() } }
-        if (pcm.isEmpty() || Build.VERSION.SDK_INT < 29) return
-        val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        thread(name = "SpeakFlow-save-recording", isDaemon = true) {
-            runCatching {
-                val speech = WavAudio.trimSilence(pcm) ?: return@runCatching
-                saver.save(WavAudio.toWav(speech), WavAudio.fileName(timestamp, sentenceNumber, success, english))
-            }.onFailure { error ->
-                mainHandler.post { onNotice("녹음을 저장하지 못했습니다: ${error.message}") }
-            }
-        }
     }
 
     private fun selectInputDevice(): Long {
@@ -583,8 +553,6 @@ class SpeechEngine(
             player.start()
         }.onFailure { mainHandler.post(onFinished) }
     }
-
-    private companion object { const val MAX_RECORDING_BYTES = WavAudio.SAMPLE_RATE * 2 * 40 }
 
     fun stop() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
     fun destroy() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }

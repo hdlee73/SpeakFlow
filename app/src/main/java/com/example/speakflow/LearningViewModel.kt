@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.speakflow.data.DatasetParser
 import com.example.speakflow.data.DatasetStore
 import com.example.speakflow.model.*
+import com.example.speakflow.speech.PronunciationRecorder
 import com.example.speakflow.speech.SpeechScorer
 import com.example.speakflow.speech.RetryEvaluator
 import kotlinx.coroutines.Job
@@ -35,6 +36,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     private val checkpointStore = LearningCheckpointStore(application)
     private var activeDatasetIds = emptyList<String>()
     private val statsStore = LearningStatsStore(application)
+    private val recorder = PronunciationRecorder(application)
     private var attemptRecorded = false
     private val _state = MutableStateFlow(LearningUiState(settings = loadSettingsWithMigration(), savedDatasets = datasetStore.list(), statistics = statsStore.list()))
     val state: StateFlow<LearningUiState> = _state.asStateFlow()
@@ -84,6 +86,35 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
                 if (++ticks % 5 == 0) statsStore.save()
             }
         }
+        viewModelScope.launch {
+            // One listening attempt = one chunk of the recording.
+            var previous = _state.value.phase
+            state.map { it.phase }.distinctUntilChanged().collect { phase ->
+                if (phase == LessonPhase.LISTENING && previous != LessonPhase.LISTENING) recorder.beginAttempt()
+                else if (phase != LessonPhase.LISTENING && previous == LessonPhase.LISTENING) recorder.endAttempt()
+                previous = phase
+            }
+        }
+        recorder.recoverInterrupted(::showMessage)
+    }
+
+    fun isRecording(): Boolean = recorder.active
+    fun onAudioChunk(buffer: ByteArray, count: Int) = recorder.appendAudio(buffer, count)
+
+    fun toggleRecording() {
+        if (_state.value.recordingStartedAt == null) {
+            recorder.start()
+            if (_state.value.phase == LessonPhase.LISTENING) recorder.beginAttempt()
+            _state.update { it.copy(recordingStartedAt = SystemClock.elapsedRealtime()) }
+        } else {
+            _state.update { it.copy(recordingStartedAt = null) }
+            recorder.stop(::showMessage)
+        }
+    }
+
+    override fun onCleared() {
+        recorder.stop { }
+        super.onCleared()
     }
 
     private fun recordAttempt(correct: Boolean) {
@@ -238,7 +269,6 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putBoolean("phone_mic", settings.phoneMic)
             .putString("strictness", settings.strictness.name)
             .putString("bluetooth_input", settings.bluetoothInputAddress)
-            .putBoolean("record_pronunciation", settings.recordPronunciation)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -545,8 +575,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
         voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE),
         strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL),
-        bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: "",
-        recordPronunciation = prefs.getBoolean("record_pronunciation", false)
+        bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: ""
         )
     }
 
