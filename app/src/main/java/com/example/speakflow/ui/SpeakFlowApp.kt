@@ -6,6 +6,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -47,7 +57,6 @@ fun SpeakFlowApp(
     onDatasetEdit: (SavedDataset) -> Unit,
     onEditorClose: () -> Unit,
     onSentenceSave: (Int, String, String) -> Unit,
-    onVoicePreview: (String) -> Unit,
     onOpenUpdate: () -> Unit,
     onDatasetSequence: (List<String>) -> Unit,
     onImport: () -> Unit,
@@ -80,12 +89,11 @@ fun SpeakFlowApp(
                         if (state.items.isEmpty()) EmptyState(onImport)
                         else LessonCard(state, expanded, onReplay, onRestart, onRetry, onNext)
                     }
-                    RecordingBar(state.recordingStartedAt, onToggleRecording)
-                    PlayerControls(state, onPrevious, onPlayPause, onNext)
+                    PlayerControls(state, onPrevious, onPlayPause, onNext, onToggleRecording)
                 }
             }
         }
-        if (settingsOpen) SettingsSheet(state.settings, state.voices, state.bluetoothDevices, state.voiceLabel, onVoicePreview, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
+        if (settingsOpen) SettingsSheet(state.settings, state.bluetoothDevices, onOpenUpdate, onSettingsClose, onSettingsSave) { statisticsOpen = true }
         if (state.editingDataset != null) DatasetEditor(state.editingDataset, state.editingItems, onEditorClose, onSentenceSave)
         if (statisticsOpen) StatisticsSheet(state.statistics) { statisticsOpen = false }
         if (datasetsOpen) DatasetSheet(state, onDatasetsClose, onDatasetSelect, onDatasetDelete, onImport, onDatasetSequence, onDatasetEdit)
@@ -142,67 +150,63 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
         else -> Blue
     }
     Card(
-        Modifier.padding(horizontal = 20.dp, vertical = 14.dp).widthIn(max = if (expanded) 560.dp else 420.dp).fillMaxHeight(.96f)
+        Modifier.padding(horizontal = if (expanded) 20.dp else 12.dp, vertical = 10.dp)
+            .widthIn(max = if (expanded) 860.dp else 520.dp).fillMaxHeight()
             .shadow(24.dp, RoundedCornerShape(28.dp), ambientColor = statusColor.copy(alpha = .18f)),
         shape = RoundedCornerShape(28.dp), colors = CardDefaults.cardColors(containerColor = Color.White)
     ) {
         Column(
-            Modifier.fillMaxSize().padding(horizontal = if (expanded) 32.dp else 22.dp, vertical = 16.dp),
+            Modifier.fillMaxSize().padding(horizontal = if (expanded) 32.dp else 18.dp, vertical = 14.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             LessonStatusHeader(state, statusColor)
             Text("문장 ${state.position / state.settings.repeatCount + 1}/${state.items.size} · 반복 ${state.repeatNumber}/${state.settings.repeatCount}", fontSize = 12.sp, color = Blue)
             Text(state.microphoneLabel, color = Color(0xFF667085), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(12.dp))
-            Column(
-                Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                val revealEnglish = !translation || item.korean.isBlank() || !state.retryText.isNullOrBlank() || state.phase in setOf(
-                    LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
-                )
+            Spacer(Modifier.height(8.dp))
+            val revealEnglish = !translation || item.korean.isBlank() || !state.retryText.isNullOrBlank() || state.phase in setOf(
+                LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
+            )
+            // The sentence gets all the free space and shrinks its font to fit, so it never
+            // gets cut off. Everything below it has a fixed height, so nothing moves once
+            // the sentence has appeared.
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 if (!revealEnglish) {
-                    val (fontSize, lineHeight) = adaptiveTextSize(item.korean.length, expanded)
-                    Text(item.korean, fontSize = fontSize, lineHeight = lineHeight, fontWeight = FontWeight.Bold, color = Ink, textAlign = TextAlign.Center)
+                    AutoFitText(AnnotatedString(item.korean), if (expanded) 38 else 30, FontWeight.Bold, Ink)
                 } else {
-                    val (fontSize, lineHeight) = adaptiveTextSize(item.english.length, expanded)
-                    RealtimeSentence(
-                        item.english, state.liveText, state.matchedWords, fontSize, lineHeight,
-                        strictness = state.settings.strictness,
-                        highlightMisses = state.phase == LessonPhase.RETRYING
+                    AutoFitText(
+                        realtimeSentence(item.english, state.liveText, state.matchedWords, state.settings.strictness, state.phase == LessonPhase.RETRYING),
+                        if (expanded) 38 else 30, FontWeight.ExtraBold, Color.Unspecified
                     )
-                    val showTranslation = item.korean.isNotBlank() && state.phase in setOf(
-                        LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
-                    )
-                    if (showTranslation) {
-                        Spacer(Modifier.height(8.dp))
-                        Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
+                }
+            }
+            Column(
+                Modifier.fillMaxWidth().height(if (expanded) 150.dp else 140.dp).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.Center) {
+                    if (state.phase == LessonPhase.LISTENING) {
+                        Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
                     }
                 }
+                val translationVisible = item.korean.isNotBlank() && revealEnglish && state.phase in setOf(
+                    LessonPhase.RETRYING, LessonPhase.CORRECT, LessonPhase.TIMED_OUT
+                )
+                if (translationVisible) {
+                    Text(item.korean, fontSize = if (item.korean.length > 70) 12.sp else 14.sp, lineHeight = 19.sp, color = Color(0xFF667085), textAlign = TextAlign.Center)
+                }
                 if (state.phase == LessonPhase.LISTENING && !state.retryText.isNullOrBlank()) {
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(6.dp))
                     Text("다시 말할 부분: ${state.retryText}", fontSize = 16.sp, color = Miss, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
                     Text("이 부분만 다시 말해도 됩니다.", fontSize = 12.sp, color = Color.Gray)
                 }
                 state.score?.let {
                     if (state.heardText.isNotBlank()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "인식: ${state.heardText}",
-                            color = Color(0xFF667085),
-                            fontSize = 11.sp,
-                            lineHeight = 15.sp,
-                            textAlign = TextAlign.Center
-                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text("인식: ${state.heardText}", color = Color(0xFF667085), fontSize = 11.sp, lineHeight = 15.sp, textAlign = TextAlign.Center)
                     }
                 }
-                if (state.phase == LessonPhase.LISTENING) {
-                    Spacer(Modifier.height(10.dp))
-                    Text("남은 시간 ${state.remainingSeconds}초", color = Blue, fontWeight = FontWeight.SemiBold)
-                }
             }
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
             when (state.phase) {
                 LessonPhase.CORRECT, LessonPhase.RETRYING, LessonPhase.TIMED_OUT -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(onClick = onRetry, modifier = Modifier.weight(1f), shape = RoundedCornerShape(13.dp)) { Text("다시 발음") }
@@ -215,6 +219,34 @@ private fun LessonCard(state: LearningUiState, expanded: Boolean, onReplay: () -
                     OutlinedButton(onClick = onRestart, shape = RoundedCornerShape(13.dp)) { Text("처음부터") }
                 }
             }
+        }
+    }
+}
+
+/** Largest font size (<= maxSp, >= 13) at which the whole text fits the available box. */
+@Composable
+private fun AutoFitText(text: AnnotatedString, maxSp: Int, weight: FontWeight, color: Color) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val maxWidthPx = with(density) { maxWidth.roundToPx() }
+        val maxHeightPx = with(density) { maxHeight.roundToPx() }
+        val minSp = 13
+        fun style(size: Int) = TextStyle(fontSize = size.sp, lineHeight = (size * 1.28f).sp, fontWeight = weight, textAlign = TextAlign.Center)
+        fun fits(size: Int) = measurer.measure(
+            text, style(size), constraints = Constraints(maxWidth = maxWidthPx)
+        ).size.height <= maxHeightPx
+        val size = remember(text.text, maxWidthPx, maxHeightPx, maxSp) {
+            var low = minSp
+            var high = maxSp
+            while (low < high) {
+                val mid = (low + high + 1) / 2
+                if (fits(mid)) low = mid else high = mid - 1
+            }
+            low
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text, style = style(size), color = color, textAlign = TextAlign.Center)
         }
     }
 }
@@ -246,22 +278,19 @@ private fun LessonStatusHeader(state: LearningUiState, statusColor: Color) {
     }
 }
 
-@Composable
-private fun RealtimeSentence(
+private fun realtimeSentence(
     expected: String,
     liveText: String,
     confirmedMatches: List<Boolean>,
-    fontSize: androidx.compose.ui.unit.TextUnit,
-    lineHeight: androidx.compose.ui.unit.TextUnit,
     strictness: RecognitionStrictness,
     highlightMisses: Boolean
-) {
+): AnnotatedString {
     val words = SpeechScorer.displayWords(expected)
     val liveMatches = SpeechScorer.matchedWords(expected, liveText, strictness)
     val matched = words.indices.map { index ->
         confirmedMatches.getOrElse(index) { false } || liveMatches.getOrElse(index) { false }
     }
-    val styled = buildAnnotatedString {
+    return buildAnnotatedString {
         words.forEachIndexed { index, word ->
             if (index > 0) append(" ")
             val hit = matched.getOrElse(index) { false }
@@ -270,12 +299,10 @@ private fun RealtimeSentence(
                 highlightMisses -> Miss
                 else -> Color(0xFFBFC2C7)
             }
-            withStyle(SpanStyle(color = color, fontWeight = if (hit) FontWeight.ExtraBold else FontWeight.Bold)) {
-                append(word)
-            }
+            // Same weight for every word: a colour change must never reflow the sentence.
+            withStyle(SpanStyle(color = color)) { append(word) }
         }
     }
-    Text(styled, fontSize = fontSize, lineHeight = lineHeight, textAlign = TextAlign.Center)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -291,7 +318,7 @@ private fun DatasetSheet(
 ) {
     var selected by remember { mutableStateOf<List<String>>(emptyList()) }
     var pendingDelete by remember { mutableStateOf<SavedDataset?>(null) }
-    ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("내 데이터셋", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
             Text("저장된 파일을 선택하면 바로 학습할 수 있어요.", color = Color(0xFF667085), fontSize = 13.sp)
@@ -361,15 +388,30 @@ private fun statusLabel(state: LearningUiState) = when (state.phase) {
     else -> "준비 완료"
 }
 
-private fun adaptiveTextSize(length: Int, expanded: Boolean) = when {
-    length <= 45 -> (if (expanded) 30.sp else 26.sp) to (if (expanded) 37.sp else 33.sp)
-    length <= 90 -> (if (expanded) 25.sp else 22.sp) to (if (expanded) 31.sp else 28.sp)
-    length <= 150 -> (if (expanded) 21.sp else 18.sp) to (if (expanded) 27.sp else 23.sp)
-    else -> (if (expanded) 18.sp else 15.sp) to (if (expanded) 23.sp else 20.sp)
+@Composable
+private fun PlayerControls(state: LearningUiState, onPrevious: () -> Unit, onPlayPause: () -> Unit, onNext: () -> Unit, onToggleRecording: () -> Unit) {
+    Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 14.dp, top = 6.dp)) {
+        Row(
+            Modifier.align(Alignment.Center),
+            horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
+        ) {
+            RoundButton(R.drawable.ic_previous, "이전 문장", 48, onPrevious, state.position > 0)
+            Spacer(Modifier.width(14.dp))
+            RoundButton(
+                if (state.phase == LessonPhase.PAUSED || state.phase == LessonPhase.IDLE || state.phase == LessonPhase.COMPLETE) R.drawable.ic_play else R.drawable.ic_pause,
+                if (state.phase == LessonPhase.PAUSED || state.phase == LessonPhase.IDLE || state.phase == LessonPhase.COMPLETE) "재생" else "일시 정지",
+                62, onPlayPause, state.items.isNotEmpty(), primary = true
+            )
+            Spacer(Modifier.width(14.dp))
+            RoundButton(R.drawable.ic_next, "다음 문장", 48, onNext, state.position <= state.order.lastIndex)
+        }
+        RecordButton(state.recordingStartedAt, onToggleRecording, Modifier.align(Alignment.CenterEnd).padding(end = 20.dp))
+    }
 }
 
+/** Small, unobtrusive start/stop button for recording the pronunciation. */
 @Composable
-private fun RecordingBar(startedAt: Long?, onToggle: () -> Unit) {
+private fun RecordButton(startedAt: Long?, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     var seconds by remember { mutableStateOf(0L) }
     LaunchedEffect(startedAt) {
         while (startedAt != null) {
@@ -377,35 +419,24 @@ private fun RecordingBar(startedAt: Long?, onToggle: () -> Unit) {
             delay(1000)
         }
     }
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp), horizontalArrangement = Arrangement.Center) {
-        if (startedAt != null) {
-            Button(
-                onClick = onToggle, shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = Miss)
-            ) { Text("■  녹음 종료 · %d:%02d".format(seconds / 60, seconds % 60), fontWeight = FontWeight.Bold) }
-        } else {
-            OutlinedButton(onClick = onToggle, shape = RoundedCornerShape(14.dp)) {
-                Text("●  녹음 시작", color = Miss, fontWeight = FontWeight.Bold)
+    val recording = startedAt != null
+    Column(
+        modifier.semantics { contentDescription = if (recording) "녹음 종료" else "녹음 시작" },
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Surface(
+            onClick = onToggle, modifier = Modifier.size(40.dp), shape = CircleShape,
+            color = if (recording) Miss else Color.White, shadowElevation = 4.dp
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (recording) Box(Modifier.size(14.dp).background(Color.White, RoundedCornerShape(3.dp)))
+                else Box(Modifier.size(14.dp).background(Miss, CircleShape))
             }
         }
-    }
-}
-
-@Composable
-private fun PlayerControls(state: LearningUiState, onPrevious: () -> Unit, onPlayPause: () -> Unit, onNext: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 24.dp, top = 8.dp),
-        horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically
-    ) {
-        RoundButton(R.drawable.ic_previous, "이전 문장", 48, onPrevious, state.position > 0)
-        Spacer(Modifier.width(14.dp))
-        RoundButton(
-            if (state.phase == LessonPhase.PAUSED || state.phase == LessonPhase.IDLE || state.phase == LessonPhase.COMPLETE) R.drawable.ic_play else R.drawable.ic_pause,
-            if (state.phase == LessonPhase.PAUSED || state.phase == LessonPhase.IDLE || state.phase == LessonPhase.COMPLETE) "재생" else "일시 정지",
-            62, onPlayPause, state.items.isNotEmpty(), primary = true
+        Text(
+            if (recording) "%d:%02d".format(seconds / 60, seconds % 60) else "녹음",
+            fontSize = 10.sp, color = if (recording) Miss else Color(0xFF667085), fontWeight = FontWeight.SemiBold
         )
-        Spacer(Modifier.width(14.dp))
-        RoundButton(R.drawable.ic_next, "다음 문장", 48, onNext, state.position <= state.order.lastIndex)
     }
 }
 
@@ -429,9 +460,9 @@ private fun RoundButton(iconRes: Int, description: String, buttonSize: Int, onCl
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice>, bluetoothDevices: List<BluetoothChoice>, voiceLabel: String, onPreview: (String) -> Unit, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
-    var draft by remember(current) { mutableStateOf(current) }
-    ModalBottomSheet(onDismissRequest = onClose, containerColor = Color.White) {
+private fun SettingsSheet(current: LearningSettings, bluetoothDevices: List<BluetoothChoice>, onOpenUpdate: () -> Unit, onClose: () -> Unit, onSave: (LearningSettings) -> Unit, onStatistics: () -> Unit) {
+    var draft by remember { mutableStateOf(current) }
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = Color.White) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.92f).navigationBarsPadding().padding(horizontal = 24.dp)) {
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
                 Text("학습 설정", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Ink)
@@ -457,36 +488,14 @@ private fun SettingsSheet(current: LearningSettings, voices: List<InstalledVoice
                 }
                 Text(draft.strictness.description, color = Color.Gray, fontSize = 12.sp)
                 Spacer(Modifier.height(18.dp))
-                Text("영어 음성", fontWeight = FontWeight.Bold)
-                Text("발음 지역", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                Text("영어 발음 (TTS)", fontWeight = FontWeight.Bold)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     VoiceAccent.entries.forEach { accent ->
-                        FilterChip(selected = draft.voiceAccent == accent, onClick = { draft = draft.copy(voiceAccent = accent, voiceId = "") }, label = { Text(accent.label) })
+                        FilterChip(selected = draft.voiceAccent == accent, onClick = { draft = draft.copy(voiceAccent = accent) }, label = { Text(accent.label) })
                     }
                 }
-                Text("목소리", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    VoiceGender.entries.forEach { gender ->
-                        FilterChip(selected = draft.voiceGender == gender, onClick = { draft = draft.copy(voiceGender = gender, voiceId = "") }, label = { Text(gender.label) })
-                    }
-                }
-                Text("엔진이 성별을 제공하지 않으면 남성·여성을 자동 확정할 수 없습니다. 미리듣기로 실제 음성을 선택하세요.", color = Color.Gray, fontSize = 12.sp)
-                if (voiceLabel.isNotBlank()) Text("현재 음성: $voiceLabel", color = Color.Gray, fontSize = 11.sp)
-                var voicesOpen by remember { mutableStateOf(false) }
-                OutlinedButton(onClick = { voicesOpen = !voicesOpen }, modifier = Modifier.fillMaxWidth()) { Text("실제 음성 선택 · 미리듣기") }
-                if (voicesOpen) {
-                    TextButton(onClick = { draft = draft.copy(voiceId = "") }) { Text("자동 선택") }
-                    val country = if (draft.voiceAccent == VoiceAccent.US) "US" else "GB"
-                    val regional = voices.filter { it.country == country }
-                    if (regional.isEmpty()) Text("이 지역 음성이 설치되어 있지 않습니다.", color = Color.Gray)
-                    regional.forEach { voice ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = draft.voiceId == voice.id, onClick = { draft = draft.copy(voiceId = voice.id) })
-                            Text(voice.label, Modifier.weight(1f), fontSize = 11.sp)
-                            TextButton(onClick = { onPreview(voice.id) }) { Text("듣기") }
-                        }
-                    }
-                }
+                Text("설치된 음성 중 가장 자연스러운 음성을 자동으로 사용합니다.", color = Color.Gray, fontSize = 12.sp)
+                Spacer(Modifier.height(18.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("야외 잡음 보정 입력", Modifier.weight(1f), fontWeight = FontWeight.Bold)
                     Switch(checked = draft.outdoorAudio, onCheckedChange = { draft = draft.copy(outdoorAudio = it) })

@@ -20,9 +20,7 @@ enum class PlayOrder(val label: String) {
     SEQUENTIAL("순서대로"), RANDOM("무작위")
 }
 
-enum class VoiceAccent(val label: String) { US("미국"), UK("영국") }
-
-enum class VoiceGender(val label: String) { FEMALE("여성"), MALE("남성") }
+enum class VoiceAccent(val label: String) { US("미국식"), UK("영국식") }
 
 enum class RecognitionStrictness(val label: String, val description: String) {
     EASY("쉬움", "비슷한 발음도 인정하고 인식 후보 8개 중 가장 가까운 것을 채택합니다. 시끄러운 곳에 알맞습니다 (이전 방식)."),
@@ -42,11 +40,9 @@ data class LearningSettings(
     val timeoutSeconds: Int = 20,
     val passScore: Int = 78,
     val mirrorAudio: Boolean = false,
-    val voiceId: String = "",
     val outdoorAudio: Boolean = false,
     val phoneMic: Boolean = false,
     val voiceAccent: VoiceAccent = VoiceAccent.US,
-    val voiceGender: VoiceGender = VoiceGender.FEMALE,
     val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL,
     /** Empty = automatic: the headset that is currently playing the sound. */
     val bluetoothInputAddress: String = ""
@@ -61,11 +57,9 @@ data class LearningUiState(
     val datasetName: String? = null,
     val activeDatasetId: String? = null,
     val savedDatasets: List<SavedDataset> = emptyList(),
-    val voices: List<InstalledVoice> = emptyList(),
     val bluetoothDevices: List<BluetoothChoice> = emptyList(),
     /** SystemClock.elapsedRealtime() when the recording was started; null = not recording. */
     val recordingStartedAt: Long? = null,
-    val voiceLabel: String = "",
     val editingDataset: SavedDataset? = null,
     val editingItems: List<SentencePair> = emptyList(),
     val heardText: String = "",
@@ -90,5 +84,3 @@ data class LearningUiState(
 }
 
 data class DailyLearning(val date: String, val attempts: Int = 0, val correct: Int = 0, val seconds: Long = 0)
-
-data class InstalledVoice(val id: String, val label: String, val country: String, val gender: VoiceGender?)

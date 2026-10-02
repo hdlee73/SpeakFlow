@@ -17,15 +17,14 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.os.SystemClock
 import android.speech.tts.Voice
 import androidx.core.content.ContextCompat
 import com.example.speakflow.R
 import com.example.speakflow.model.BluetoothChoice
 import com.example.speakflow.model.VoiceAccent
-import com.example.speakflow.model.VoiceGender
 import java.util.Locale
 import android.bluetooth.BluetoothManager
-import com.example.speakflow.model.InstalledVoice
 
 class SpeechEngine(
     context: Context,
@@ -34,8 +33,6 @@ class SpeechEngine(
     private val onPartialResult: (List<String>) -> Unit,
     private val onResult: (List<String>) -> Unit,
     private val onUnavailable: (String) -> Unit,
-    private val onVoicesChanged: (List<InstalledVoice>) -> Unit,
-    private val onVoiceChanged: (String) -> Unit,
     private val onBluetoothDevicesChanged: (List<BluetoothChoice>) -> Unit,
     private val onNotice: (String) -> Unit,
     /** Every chunk of the app-owned microphone input, for the recording button. */
@@ -46,14 +43,12 @@ class SpeechEngine(
     private data class PendingPrompt(
         val text: String,
         val korean: Boolean,
-        val accent: VoiceAccent,
-        val gender: VoiceGender
+        val accent: VoiceAccent
     )
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(AudioManager::class.java)
     var mirrorAudio: Boolean = false
-    var voiceId: String = ""
     var outdoorAudio: Boolean = false
     private var recordingNoticeShown = false
     var phoneMic: Boolean = false
@@ -80,6 +75,10 @@ class SpeechEngine(
     private var pendingListen: Runnable? = null
     private var pendingReadyTimeout: Runnable? = null
     private var pendingPrompt: PendingPrompt? = null
+    private var pendingSpeak: Runnable? = null
+    private var promptWatchdog: Runnable? = null
+    @Volatile private var promptStarted = false
+    private var appliedVoiceKey: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var tts: TextToSpeech
     private var recognizer = if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
@@ -96,10 +95,9 @@ class SpeechEngine(
                         .build()
                 )
                 tts.setPitch(1f)
-                publishVoices()
                 pendingPrompt?.also { prompt ->
                     pendingPrompt = null
-                    speakNow(prompt.text, prompt.korean, prompt.accent, prompt.gender)
+                    speakNow(prompt, 0)
                 }
             } else {
                 pendingPrompt = null
@@ -107,7 +105,7 @@ class SpeechEngine(
             }
         }
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
+            override fun onStart(utteranceId: String?) { if (utteranceId != null && utteranceId == currentPromptId) promptStarted = true }
             override fun onDone(utteranceId: String?) {
                 // Bluetooth media playback can finish at the TTS engine slightly before
                 // the headset has rendered its final audio frames. Leave a short tail
@@ -161,8 +159,9 @@ class SpeechEngine(
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
-    fun speak(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
+    fun speak(text: String, korean: Boolean, accent: VoiceAccent) {
         currentPromptId = null
+        cancelPendingSpeak()
         cancelPendingListen()
         recognitionGeneration++
         recognitionStarting = false
@@ -170,89 +169,106 @@ class SpeechEngine(
         recognizer?.cancel()
         closeOutdoorInput()
         restoreRecognitionAudio()
+        val wasInCallMode = bluetoothRouteActive || communicationRouteActive
         restoreAudioRoute()
+        val prompt = PendingPrompt(text, korean, accent)
         if (!ttsReady) {
-            pendingPrompt = PendingPrompt(text, korean, accent, gender)
+            pendingPrompt = prompt
             return
         }
-        speakNow(text, korean, accent, gender)
+        if (wasInCallMode) waitForMediaRoute(prompt) else speakNow(prompt, 0)
     }
 
-    private fun speakNow(text: String, korean: Boolean, accent: VoiceAccent, gender: VoiceGender) {
-        val locale = if (korean) Locale.KOREA else when (accent) {
+    /**
+     * Right after the microphone phase the headset is still in call (SCO) mode. Speaking
+     * before it has switched back to media (A2DP) either loses the first words or the
+     * whole sentence, so wait until the media route is really back (bounded).
+     */
+    private fun waitForMediaRoute(prompt: PendingPrompt) {
+        val startedAt = SystemClock.elapsedRealtime()
+        lateinit var check: Runnable
+        check = Runnable {
+            val waited = SystemClock.elapsedRealtime() - startedAt
+            val ready = if (Build.VERSION.SDK_INT >= 33) waited >= 150L && mediaRouteReady() else waited >= 500L
+            if (ready || waited >= 1500L) {
+                pendingSpeak = null
+                speakNow(prompt, 0)
+            } else mainHandler.postDelayed(check, 50L)
+        }
+        pendingSpeak = check
+        mainHandler.postDelayed(check, 50L)
+    }
+
+    private fun mediaRouteReady(): Boolean = runCatching {
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        val device = audioManager?.getAudioDevicesForAttributes(attributes)?.firstOrNull() ?: return@runCatching true
+        device.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO && device.type != AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+    }.getOrDefault(true)
+
+    private fun cancelPendingSpeak() {
+        pendingSpeak?.let(mainHandler::removeCallbacks)
+        pendingSpeak = null
+        promptWatchdog?.let(mainHandler::removeCallbacks)
+        promptWatchdog = null
+    }
+
+    private fun speakNow(prompt: PendingPrompt, attempt: Int) {
+        val locale = if (prompt.korean) Locale.KOREA else when (prompt.accent) {
             VoiceAccent.US -> Locale.US
             VoiceAccent.UK -> Locale.UK
         }
-        val languageResult = tts.setLanguage(locale)
-        if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
-            onUnavailable(if (korean) "한국어 TTS 음성이 설치되어 있지 않습니다." else "영어 TTS 음성이 설치되어 있지 않습니다.")
-            return
+        val key = locale.toLanguageTag()
+        if (appliedVoiceKey != key) {
+            val languageResult = tts.setLanguage(locale)
+            if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                onUnavailable(if (prompt.korean) "한국어 TTS 음성이 설치되어 있지 않습니다." else "영어 TTS 음성이 설치되어 있지 않습니다.")
+                return
+            }
+            bestVoice(locale)?.let { runCatching { tts.voice = it } }
+            appliedVoiceKey = key
         }
-        selectNaturalVoice(locale, if (korean) null else gender)
-        tts.setSpeechRate(if (korean) .90f else .84f)
+        tts.setSpeechRate(if (prompt.korean) .90f else .84f)
         tts.setPitch(1f)
         val params = Bundle().apply { putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1f) }
-        currentPromptId = "prompt-${++promptVersion}"
-        if (tts.speak(naturalizeForSpeech(text, korean), TextToSpeech.QUEUE_FLUSH, params, currentPromptId) == TextToSpeech.ERROR) {
+        val id = "prompt-${++promptVersion}"
+        currentPromptId = id
+        promptStarted = false
+        // A short silent lead-in wakes a sleeping Bluetooth link so the first word is not clipped.
+        val lead = activeMediaOutputAddress() != null
+        var result = TextToSpeech.SUCCESS
+        if (lead) {
+            tts.playSilentUtterance(250L, TextToSpeech.QUEUE_FLUSH, "$id-lead")
+            result = tts.speak(naturalizeForSpeech(prompt.text, prompt.korean), TextToSpeech.QUEUE_ADD, params, id)
+        } else {
+            result = tts.speak(naturalizeForSpeech(prompt.text, prompt.korean), TextToSpeech.QUEUE_FLUSH, params, id)
+        }
+        if (result == TextToSpeech.ERROR) {
             onUnavailable("예문 음성을 재생하지 못했습니다. 미디어 음량을 확인해 주세요.")
+            return
         }
-    }
-
-    private fun knownGender(voice: Voice): VoiceGender? = when {
-        voiceGenderScore(voice, VoiceGender.FEMALE) == 2 -> VoiceGender.FEMALE
-        voiceGenderScore(voice, VoiceGender.MALE) == 2 -> VoiceGender.MALE
-        else -> null
-    }
-
-    private fun publishVoices() {
-        val installed = tts.voices.orEmpty().filter { it.locale.language == "en" }
-            .sortedWith(compareBy<Voice> { it.locale.country }.thenBy { it.name })
-            .map { voice -> InstalledVoice(voice.name,
-                "${voice.locale.country} · ${knownGender(voice)?.label ?: "성별 미제공"} · ${voice.name}",
-                voice.locale.country, knownGender(voice)) }
-        mainHandler.post { onVoicesChanged(installed) }
-    }
-
-    fun previewVoice(id: String) {
-        if (!ttsReady) return
-        stop()
-        val voice = tts.voices.orEmpty().firstOrNull { it.name == id } ?: return
-        tts.voice = voice
-        tts.setSpeechRate(.84f)
-        tts.speak("Could you help me figure this out? I would appreciate your advice.", TextToSpeech.QUEUE_FLUSH, null, "preview")
-    }
-
-    private fun selectNaturalVoice(locale: Locale, gender: VoiceGender?) {
-        val regional = tts.voices.orEmpty().filter { it.locale.language == locale.language && it.locale.country == locale.country }
-        val direct = regional.firstOrNull { it.name == voiceId && locale.language == "en" }
-        val voice = direct ?: regional.maxWithOrNull(compareBy<Voice> { voiceGenderScore(it, gender) }
-            .thenBy { it.quality }.thenBy { -it.latency })
-        if (voice != null) runCatching { tts.voice = voice }
-        if (locale.language == "en") {
-            val label = when {
-                voice == null -> "선택 지역의 음성이 없습니다. TTS 엔진 설정을 확인하세요."
-                direct != null -> "직접 선택: ${voice.name}"
-                knownGender(voice) == gender -> "${locale.country} ${gender?.label}: ${voice.name}"
-                else -> "자동 선택 (엔진이 성별 정보를 제공하지 않음): ${voice.name}"
+        // If the engine never starts the utterance, retry once instead of leaving the lesson silent.
+        val watchdog = Runnable {
+            if (currentPromptId != id || promptStarted) return@Runnable
+            tts.stop()
+            if (attempt < 1) speakNow(prompt, attempt + 1)
+            else {
+                onNotice("예문 음성이 재생되지 않아 다음 단계로 넘어갑니다.")
+                onPromptFinished()
             }
-            mainHandler.post { onVoiceChanged(label) }
         }
+        promptWatchdog = watchdog
+        mainHandler.postDelayed(watchdog, 3000L)
     }
 
-    private fun voiceGenderScore(voice: Voice, requested: VoiceGender?): Int {
-        if (requested == null) return 0
-        val descriptor = buildString {
-            append(voice.name.lowercase(Locale.US))
-            append(' ')
-            append(voice.features.joinToString(" ").lowercase(Locale.US))
-        }
-        val female = listOf("female", "woman", "f01", "_f_", "-f-").any(descriptor::contains)
-        val male = !female && listOf("male", "man", "m01", "_m_", "-m-").any(descriptor::contains)
-        return when (requested) {
-            VoiceGender.FEMALE -> if (female) 2 else if (male) -1 else 0
-            VoiceGender.MALE -> if (male) 2 else if (female) -1 else 0
-        }
-    }
+    /** Best installed voice for the locale: offline first, then quality, then low latency. */
+    private fun bestVoice(locale: Locale): Voice? = tts.voices.orEmpty()
+        .filter { it.locale.language == locale.language && it.locale.country == locale.country }
+        .filter { TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED !in it.features }
+        .maxWithOrNull(compareBy<Voice> { if (it.isNetworkConnectionRequired) 0 else 1 }
+            .thenBy { it.quality }.thenBy { -it.latency })
 
     private fun naturalizeForSpeech(text: String, korean: Boolean): String {
         val trimmed = text.trim()
@@ -554,6 +570,6 @@ class SpeechEngine(
         }.onFailure { mainHandler.post(onFinished) }
     }
 
-    fun stop() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
-    fun destroy() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
+    fun stop() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingSpeak(); cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.cancel(); restoreRecognitionAudio(); restoreAudioRoute(); tts.stop() }
+    fun destroy() { recognitionGeneration++; closeOutdoorInput(); currentPromptId = null; pendingPrompt = null; cancelPendingSpeak(); cancelPendingListen(); acceptingRecognitionResults = false; recognitionStarting = false; recognizer?.destroy(); restoreRecognitionAudio(); restoreAudioRoute(); tts.shutdown() }
 }

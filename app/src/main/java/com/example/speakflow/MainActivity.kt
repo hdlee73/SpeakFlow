@@ -36,8 +36,6 @@ class MainActivity : ComponentActivity() {
             onPartialResult = viewModel::onPartialRecognition,
             onResult = viewModel::onRecognition,
             onUnavailable = viewModel::onRecognitionUnavailable,
-            onVoicesChanged = viewModel::onVoicesChanged,
-            onVoiceChanged = viewModel::onVoiceChanged,
             onBluetoothDevicesChanged = viewModel::onBluetoothDevicesChanged,
             onNotice = viewModel::showMessage,
             recordingTee = viewModel::onAudioChunk,
@@ -50,8 +48,8 @@ class MainActivity : ComponentActivity() {
             var datasetsOpen by rememberSaveable { mutableStateOf(false) }
             var bluetoothPermissionRequested by rememberSaveable { mutableStateOf(false) }
             SideEffect { hasOpenDialog = settingsOpen || datasetsOpen || state.editingDataset != null }
-            val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                uri?.let(viewModel::importDataset)
+            val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                viewModel.importDatasets(uris)
             }
             val audioPermissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
                 val microphoneGranted = grants[Manifest.permission.RECORD_AUDIO]
@@ -62,7 +60,6 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(state.phase, state.position, state.listenRequestId, state.promptRequestId) {
                 speech.mirrorAudio = state.settings.mirrorAudio
-                speech.voiceId = state.settings.voiceId
                 speech.phoneMic = state.settings.phoneMic
                 speech.bluetoothInputAddress = state.settings.bluetoothInputAddress
                 speech.outdoorAudio = state.settings.outdoorAudio
@@ -74,8 +71,7 @@ class MainActivity : ComponentActivity() {
                         speech.speak(
                             text = if (korean) it.korean else it.english,
                             korean = korean,
-                            accent = state.settings.voiceAccent,
-                            gender = state.settings.voiceGender
+                            accent = state.settings.voiceAccent
                         )
                     }
                     LessonPhase.LISTENING -> {
@@ -135,7 +131,6 @@ class MainActivity : ComponentActivity() {
                 onDatasetEdit = { datasetsOpen = false; viewModel.editDataset(it) },
                 onEditorClose = viewModel::closeEditor,
                 onSentenceSave = viewModel::saveSentence,
-                onVoicePreview = speech::previewVoice,
                 onOpenUpdate = { startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/hdlee73/SpeakFlow/releases/latest"))) },
                 onDatasetSequence = { viewModel.selectDatasets(it); datasetsOpen = false },
                 onImport = { datasetsOpen = false; filePicker.launch(arrayOf("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "text/csv", "application/vnd.ms-excel")) },

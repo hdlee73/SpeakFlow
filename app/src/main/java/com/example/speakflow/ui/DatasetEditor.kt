@@ -18,7 +18,7 @@ internal fun DatasetEditor(dataset: SavedDataset, rows: List<SentencePair>, onCl
     var editing by remember(dataset.id) { mutableStateOf<Int?>(null) }
     var english by remember { mutableStateOf("") }
     var korean by remember { mutableStateOf("") }
-    ModalBottomSheet(onDismissRequest = onClose) {
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.94f).padding(20.dp)) {
             Text("데이터셋 문장 편집", fontSize = 22.sp)
             Text(dataset.name, fontSize = 12.sp)
