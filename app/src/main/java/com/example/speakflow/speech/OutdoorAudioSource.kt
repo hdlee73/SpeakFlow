@@ -10,7 +10,7 @@ import java.io.Closeable
 import kotlin.concurrent.thread
 
 // Optional Android 13+ input for engines that accept EXTRA_AUDIO_SOURCE.
-class OutdoorAudioSource : Closeable {
+class OutdoorAudioSource(private val tee: ((ByteArray, Int) -> Unit)? = null) : Closeable {
     private var recorder: AudioRecord? = null
     private var pipe: Array<ParcelFileDescriptor>? = null
     private val effects = mutableListOf<AudioEffect>()
@@ -50,6 +50,8 @@ class OutdoorAudioSource : Closeable {
                     while (running) {
                         val count = record.read(buffer, 0, buffer.size)
                         if (count <= 0) break
+                        // Copy first: if the engine stops reading, the pipe blocks on write.
+                        tee?.invoke(buffer, count)
                         output.write(buffer, 0, count)
                     }
                 }

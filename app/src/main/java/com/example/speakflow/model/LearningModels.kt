@@ -49,7 +49,8 @@ data class LearningSettings(
     val voiceGender: VoiceGender = VoiceGender.FEMALE,
     val strictness: RecognitionStrictness = RecognitionStrictness.NORMAL,
     /** Empty = automatic: the headset that is currently playing the sound. */
-    val bluetoothInputAddress: String = ""
+    val bluetoothInputAddress: String = "",
+    val recordPronunciation: Boolean = false
 )
 
 data class LearningUiState(

@@ -157,6 +157,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun onVoicesChanged(voices: List<InstalledVoice>) = _state.update { it.copy(voices = voices) }
+    fun showMessage(text: String) = _state.update { it.copy(message = text) }
     fun onBluetoothDevicesChanged(devices: List<BluetoothChoice>) = _state.update { it.copy(bluetoothDevices = devices) }
     fun onVoiceChanged(label: String) = _state.update { it.copy(voiceLabel = label) }
 
@@ -237,6 +238,7 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putBoolean("phone_mic", settings.phoneMic)
             .putString("strictness", settings.strictness.name)
             .putString("bluetooth_input", settings.bluetoothInputAddress)
+            .putBoolean("record_pronunciation", settings.recordPronunciation)
             .apply()
         timerJob?.cancel()
         advanceJob?.cancel()
@@ -543,7 +545,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
         voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE),
         strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL),
-        bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: ""
+        bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: "",
+        recordPronunciation = prefs.getBoolean("record_pronunciation", false)
         )
     }
 
