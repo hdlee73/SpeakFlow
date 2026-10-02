@@ -29,7 +29,7 @@ internal fun StatisticsSheet(days: List<DailyLearning>, onClose: () -> Unit) {
     val filtered = if (period == "오늘") days.filter { it.date == today.toString() } else days
     val groups = filtered.groupBy { key(LocalDate.parse(it.date)) }.toSortedMap(compareByDescending { it })
     fun duration(seconds: Long) = "${seconds / 3600}시간 ${(seconds % 3600) / 60}분 ${seconds % 60}초"
-    ModalBottomSheet(onDismissRequest = onClose) {
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().fillMaxHeight(.9f).padding(24.dp).verticalScroll(rememberScrollState())) {
             Text("학습 통계", fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Text("학습량은 정답 또는 시간 종료로 끝난 발음 시도 수입니다. 반복과 재시도도 포함하며, 건너뛴 문장은 제외합니다. 시간은 예문 듣기·발음 중만 누적됩니다.", fontSize = 12.sp)

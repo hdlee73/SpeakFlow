@@ -154,20 +154,41 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun importDataset(uri: Uri) {
+    fun importDatasets(uris: List<Uri>) {
+        if (uris.isEmpty()) return
         viewModelScope.launch {
-            runCatching {
-                val resolver = getApplication<Application>().contentResolver
-                val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                    if (it.moveToFirst()) it.getString(0) else null
-                } ?: "dataset.xlsx"
-                runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                val (saved, items) = datasetStore.import(uri, name)
+            val resolver = getApplication<Application>().contentResolver
+            val imported = mutableListOf<Pair<SavedDataset, List<SentencePair>>>()
+            var lastError: String? = null
+            var failures = 0
+            for (uri in uris) {
+                runCatching {
+                    val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                        if (it.moveToFirst()) it.getString(0) else null
+                    } ?: "dataset.xlsx"
+                    runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                    datasetStore.import(uri, name)
+                }.onSuccess { imported += it }
+                    .onFailure { failures++; lastError = it.message }
+            }
+            if (imported.isEmpty()) {
+                _state.update { it.copy(message = lastError ?: "파일을 읽지 못했습니다.") }
+                return@launch
+            }
+            _state.update { it.copy(savedDatasets = datasetStore.list()) }
+            if (imported.size == 1) {
+                val (saved, items) = imported.first()
                 prefs.edit().putString("active_dataset_id", saved.id).apply()
-                _state.update { it.copy(savedDatasets = datasetStore.list()) }
                 resetWith(items, saved.name, saved.id)
-            }.onFailure { error ->
-                _state.update { it.copy(message = error.message ?: "파일을 읽지 못했습니다.") }
+                if (failures > 0) showMessage("${failures}개 파일은 읽지 못했습니다.")
+            } else {
+                resetWith(
+                    imported.flatMap { it.second },
+                    imported.joinToString(" → ") { it.first.name.removeSuffix(".csv").removeSuffix(".xlsx") },
+                    "playlist",
+                    imported.map { it.first.id }
+                )
+                showMessage("${imported.size}개 데이터셋을 불러와 이어서 학습합니다." + if (failures > 0) " (${failures}개 실패)" else "")
             }
         }
     }
@@ -187,10 +208,8 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun onVoicesChanged(voices: List<InstalledVoice>) = _state.update { it.copy(voices = voices) }
     fun showMessage(text: String) = _state.update { it.copy(message = text) }
     fun onBluetoothDevicesChanged(devices: List<BluetoothChoice>) = _state.update { it.copy(bluetoothDevices = devices) }
-    fun onVoiceChanged(label: String) = _state.update { it.copy(voiceLabel = label) }
 
     fun editDataset(dataset: SavedDataset) {
         pauseForBackground()
@@ -263,8 +282,6 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
             .putInt("timeout", 20)
             .putInt("pass_score", settings.passScore)
             .putString("voice_accent", settings.voiceAccent.name)
-            .putString("voice_gender", settings.voiceGender.name)
-            .putString("voice_id", settings.voiceId)
             .putBoolean("outdoor_audio", settings.outdoorAudio)
             .putBoolean("phone_mic", settings.phoneMic)
             .putString("strictness", settings.strictness.name)
@@ -569,11 +586,9 @@ class LearningViewModel(application: Application) : AndroidViewModel(application
         timeoutSeconds = 20,
         mirrorAudio = prefs.getBoolean("mirror_audio", false),
         passScore = prefs.getInt("pass_score", 65),
-        voiceId = prefs.getString("voice_id", "") ?: "",
         outdoorAudio = prefs.getBoolean("outdoor_audio", false),
         phoneMic = prefs.getBoolean("phone_mic", false),
         voiceAccent = runCatching { VoiceAccent.valueOf(prefs.getString("voice_accent", null) ?: "US") }.getOrDefault(VoiceAccent.US),
-        voiceGender = runCatching { VoiceGender.valueOf(prefs.getString("voice_gender", null) ?: "FEMALE") }.getOrDefault(VoiceGender.FEMALE),
         strictness = runCatching { RecognitionStrictness.valueOf(prefs.getString("strictness", null) ?: "NORMAL") }.getOrDefault(RecognitionStrictness.NORMAL),
         bluetoothInputAddress = prefs.getString("bluetooth_input", "") ?: ""
         )
